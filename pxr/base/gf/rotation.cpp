@@ -21,6 +21,9 @@
 // KIND, either express or implied. See the Apache License for the specific
 // language governing permissions and limitations under the Apache License.
 //
+//
+#include "boost/math/special_functions/sin_pi.hpp"
+#include "boost/math/special_functions/cos_pi.hpp"
 
 #include "pxr/pxr.h"
 #include "pxr/base/gf/rotation.h"
@@ -92,9 +95,16 @@ GfRotation::SetRotateInto(const GfVec3d &rotateFrom, const GfVec3d &rotateTo)
 GfQuatd
 GfRotation::GetQuat() const
 {
+#if 0
     double radians = GfDegreesToRadians(_angle) / 2.0;
     double sinR, cosR;
     GfSinCos(radians, &sinR, &cosR);
+#else
+    // std::sin and std::cos has slight precision issue(especially in 45 * n angle),
+    // so use boost's sin_pi/cos_pi for better accuracy.
+    double sinR = boost::math::sin_pi(_angle / 2.0);
+    double cosR = boost::math::cos_pi(_angle / 2.0);
+#endif
     GfVec3d axis = _axis * sinR;
     return GfQuatd(cosR, axis).GetNormalized();
 }
