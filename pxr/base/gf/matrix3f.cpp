@@ -423,6 +423,7 @@ GfMatrix3f::SetRotate(const GfRotation &rot)
 void
 GfMatrix3f::_SetRotateFromQuat(float r, const GfVec3f& i)
 {
+#if 0
     _mtx[0][0] = 1.0 - 2.0 * (i[1] * i[1] + i[2] * i[2]);
     _mtx[0][1] =       2.0 * (i[0] * i[1] + i[2] *    r);
     _mtx[0][2] =       2.0 * (i[2] * i[0] - i[1] *    r);
@@ -434,6 +435,21 @@ GfMatrix3f::_SetRotateFromQuat(float r, const GfVec3f& i)
     _mtx[2][0] =       2.0 * (i[2] * i[0] + i[1] *    r);
     _mtx[2][1] =       2.0 * (i[1] * i[2] - i[0] *    r);
     _mtx[2][2] = 1.0 - 2.0 * (i[1] * i[1] + i[0] * i[0]);
+#else
+    // robust version
+    _mtx[0][0] = r * r + i[0] * i[0] - i[1] * i[1] - i[2] * i[2];
+    _mtx[0][1] =       2.0 * (i[0] * i[1] + i[2] *    r);
+    _mtx[0][2] =       2.0 * (i[2] * i[0] - i[1] *    r);
+
+    _mtx[1][0] =       2.0 * (i[0] * i[1] - i[2] *    r);
+    _mtx[1][1] = r * r - i[0] * i[0] + i[1] * i[1] - i[2] * i[2];
+    _mtx[1][2] =       2.0 * (i[1] * i[2] + i[0] *    r);
+
+    _mtx[2][0] =       2.0 * (i[2] * i[0] + i[1] *    r);
+    _mtx[2][1] =       2.0 * (i[1] * i[2] - i[0] *    r);
+    _mtx[2][2] = r * r - i[0] * i[0] - i[1] * i[1] + i[2] * i[2];
+
+#endif
 }
                             
 
