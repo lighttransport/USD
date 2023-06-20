@@ -3,10 +3,14 @@ LTE's fork of USD
 
 This fork contains some modification from LTE(Light Transport Entertainment Inc).
 
-Fixes
------
+Fixes/additions
+---------------
 
 * [x] Fix quaternion rotation matrix computation.
+* [x] Handy build scripts
+  * Minimal dependency + monolithic build [mindep-mono.sh](build_scripts/mindep-mono.sh)
+
+The following is the original content of README.md
 
 Universal Scene Description
 ===========================
