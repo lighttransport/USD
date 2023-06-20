@@ -1,3 +1,13 @@
+LTE's fork of USD
+=================
+
+This fork contains some modification from LTE(Light Transport Entertainment Inc).
+
+Fixes
+-----
+
+* [x] Fix quaternion rotation matrix computation.
+
 Universal Scene Description
 ===========================
 
