@@ -30,6 +30,7 @@
 #include "pxr/usd/usdGeom/pointInstancer.h"
 #include "pxr/usd/usd/attributeQuery.h"
 #include "pxr/base/gf/bbox3d.h"
+#include "pxr/base/tf/hash.h"
 #include "pxr/base/tf/hashmap.h"
 #include "pxr/base/work/dispatcher.h"
 
@@ -484,6 +485,15 @@ private:
         // The cached bboxes for the various values of purpose token.
         _PurposeToBBoxMap bboxes;
 
+        // Queries for attributes that need to be re-computed at each
+        // time for this entry. This will be invalid for non-varying entries.
+        boost::shared_array<UsdAttributeQuery> queries;
+
+        // Computed purpose info of the prim that's associated with the entry.
+        // This data includes the prim's actual computed purpose as well as
+        // whether this purpose is inheritable by child prims.
+        UsdGeomImageable::PurposeInfo purposeInfo;
+
         // True when data in the entry is valid.
         bool isComplete;
 
@@ -492,15 +502,6 @@ private:
 
         // True when the entry is visible.
         bool isIncluded;
-
-        // Computed purpose info of the prim that's associated with the entry.
-        // This data includes the prim's actual computed purpose as well as
-        // whether this purpose is inheritable by child prims.
-        UsdGeomImageable::PurposeInfo purposeInfo;
-
-        // Queries for attributes that need to be re-computed at each
-        // time for this entry. This will be invalid for non-varying entries.
-        boost::shared_array<UsdAttributeQuery> queries;
     };
 
     // Returns the cache entry for the given \p prim if one already exists.
@@ -541,10 +542,18 @@ private:
     // Helper to determine if we should use extents hints for \p prim.
     inline bool _UseExtentsHintForPrim(UsdPrim const &prim) const;
 
-    // Need hash_value for boost to key cache entries by prim context.
-    friend size_t hash_value(const _PrimContext &key);
+    // Specialize TfHashAppend for TfHash
+    template <typename HashState>
+    friend void TfHashAppend(HashState& h, const _PrimContext &key)
+    {
+        h.Append(key.prim);
+        h.Append(key.instanceInheritablePurpose);
+    }
 
-    typedef boost::hash<_PrimContext> _PrimContextHash;
+    // Need hash_value for boost to key cache entries by prim context.
+    friend size_t hash_value(const _PrimContext &key) { return TfHash{}(key); }
+
+    typedef TfHash _PrimContextHash;
     typedef TfHashMap<_PrimContext, _Entry, _PrimContextHash> _PrimBBoxHashMap;
 
     // Finds the cache entry for the prim context if it exists.

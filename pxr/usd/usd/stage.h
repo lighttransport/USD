@@ -1820,6 +1820,10 @@ private:
         const std::vector<Usd_PrimDataPtr> &prims,
         const std::vector<SdfPath> *primIndexPaths = nullptr);
 
+    // Composes the full prim type info for the prim based on its type name
+    // and applied API schemas.
+    void _ComposePrimTypeInfoImpl(Usd_PrimDataPtr prim);
+
     // Compose subtree rooted at \p prim under \p parent.  This function
     // ensures that the appropriate prim index is specified for \p prim if
     // \p parent is in a prototype.
@@ -2244,6 +2248,9 @@ private:
     void _RegisterPerLayerNotices();
     void _RegisterResolverChangeNotice();
 
+    // Helper to obtain a malloc tag string for this stage.
+    inline char const *_GetMallocTagId() const;
+
 private:
 
     // The 'pseudo root' prim.
@@ -2299,7 +2306,7 @@ private:
 
     // To provide useful aggregation of malloc stats, we bill everything
     // for this stage - from all access points - to this tag.
-    char const *_mallocTagID;
+    std::unique_ptr<std::string> _mallocTagID;
 
     // The state used when instantiating the stage.
     const InitialLoadSet _initialLoadSet;

@@ -46,6 +46,7 @@ pxr_library(sdf
         mapEditor
         namespaceEdit
         notice
+        opaqueValue
         path
         pathNode
         pathTable
@@ -139,6 +140,7 @@ pxr_library(sdf
         wrapLayerTree.cpp
         wrapNamespaceEdit.cpp
         wrapNotice.cpp
+        wrapOpaqueValue.cpp
         wrapPath.cpp
         wrapPayload.cpp
         wrapPrimSpec.cpp
@@ -161,6 +163,7 @@ pxr_library(sdf
 
     DOXYGEN_FILES
         overview.dox
+        doxygen/fileFormatPlugin.dox
 )
 
 # Validate that the checked in generated code matches the sources. This requires
@@ -190,6 +193,7 @@ pxr_test_scripts(
     testenv/testSdfAttribute.py
     testenv/testSdfAttributeBlocking.py
     testenv/testSdfBatchNamespaceEdit.py
+    testenv/testSdfFileFormatCapabilities.py
     testenv/testSdfCopyUtils.py
     testenv/testSdfCustomLayerData.py
     testenv/testSdfDetachedLayer.py
@@ -207,6 +211,17 @@ pxr_test_scripts(
     testenv/testSdfSpecHash.py
     testenv/testSdfTimeCode.py
     testenv/testSdfTypes.py
+)
+
+pxr_build_test_shared_lib(TestSdfFileFormatCapabilities
+    CREATE_FRAMEWORK
+    INSTALL_PREFIX SdfPlugins
+    LIBRARIES
+        sdf
+        tf
+
+    CPPFILES
+        testenv/TestSdfFileFormatCapabilities.cpp
 )
 
 pxr_build_test_shared_lib(TestSdfNoAssetFileFormat
@@ -299,7 +314,7 @@ pxr_build_test(testSdfPathTable
 pxr_build_test(testSdfPathThreading
     LIBRARIES
         sdf
-        ${Boost_PROGRAM_OPTIONS_LIBRARY}
+        tf
     CPPFILES
         testenv/testSdfPathThreading.cpp
 )
@@ -396,6 +411,11 @@ pxr_register_test(testSdfHardToReach
 pxr_register_test(testSdfFileFormat
     PYTHON
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testSdfFileFormat"
+)
+
+pxr_register_test(testSdfFileFormatCapabilities
+    PYTHON
+    COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testSdfFileFormatCapabilities"
 )
 
 pxr_register_test(testSdfLayer

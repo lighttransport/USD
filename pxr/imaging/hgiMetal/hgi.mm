@@ -130,11 +130,15 @@ HgiMetal::~HgiMetal()
     [_captureScopeFullFrame release];
     [_commandQueue release];
     [_argEncoderBuffer release];
+    [_argEncoderSampler release];
     [_argEncoderTexture release];
     
-    while(_freeArgBuffers.size()) {
-        [_freeArgBuffers.top() release];
-        _freeArgBuffers.pop();
+    {
+        std::lock_guard<std::mutex> lock(_freeArgMutex);
+        while(_freeArgBuffers.size()) {
+            [_freeArgBuffers.top() release];
+            _freeArgBuffers.pop();
+        }
     }
 }
 
@@ -164,9 +168,10 @@ HgiMetal::CreateGraphicsCmds(
 }
 
 HgiComputeCmdsUniquePtr
-HgiMetal::CreateComputeCmds()
+HgiMetal::CreateComputeCmds(
+    HgiComputeCmdsDesc const& desc)
 {
-    HgiComputeCmds* computeCmds = new HgiMetalComputeCmds(this);
+    HgiComputeCmds* computeCmds = new HgiMetalComputeCmds(this, desc);
     if (!_currentCmds) {
         _currentCmds = computeCmds;
     }
@@ -426,6 +431,22 @@ HgiMetal::CommitSecondaryCommandBuffer(
     id<MTLCommandBuffer> commandBuffer,
     CommitCommandBufferWaitType waitType)
 {
+    // If there are active arg buffers on this command buffer, add a callback
+    // to release them back to the free pool.
+    if (!_activeArgBuffers.empty()) {
+        _ActiveArgBuffers argBuffersToFree;
+        argBuffersToFree.swap(_activeArgBuffers);
+
+        [_commandBuffer
+         addCompletedHandler:^(id<MTLCommandBuffer> cmdBuffer)
+         {
+            std::lock_guard<std::mutex> lock(_freeArgMutex);
+            for (id<MTLBuffer> argBuffer : argBuffersToFree) {
+                _freeArgBuffers.push(argBuffer);
+            }
+         }];
+    }
+
     [commandBuffer commit];
     if (waitType == CommitCommandBuffer_WaitUntilScheduled) {
         [commandBuffer waitUntilScheduled];
@@ -482,12 +503,8 @@ HgiMetal::GetArgBuffer()
         TF_CODING_ERROR("_commandBuffer is null");
     }
 
-    [_commandBuffer
-     addCompletedHandler:^(id<MTLCommandBuffer> cmdBuffer)
-     {
-        std::lock_guard<std::mutex> lock(_freeArgMutex);
-        _freeArgBuffers.push(buffer);
-     }];
+    // Keep track of active arg buffers to reuse after command buffer commit.
+    _activeArgBuffers.push_back(buffer);
 
     return buffer;
 }

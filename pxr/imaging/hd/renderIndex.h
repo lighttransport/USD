@@ -359,11 +359,17 @@ public:
     HD_API
     void InsertSceneIndex(
             const HdSceneIndexBaseRefPtr &inputScene,
-            SdfPath const& scenePathPrefix);
+            SdfPath const& scenePathPrefix,
+            bool needsPrefixing = true);
 
     HD_API
     void RemoveSceneIndex(
             const HdSceneIndexBaseRefPtr &inputScene);
+
+    /// The terminal scene index that is driving what is in the render index
+    /// through emulation.
+    HD_API
+    HdSceneIndexBaseRefPtr GetTerminalSceneIndex() const;
 
     // ---------------------------------------------------------------------- //
     /// \name Render Delegate
@@ -421,7 +427,7 @@ private:
     // ---------------------------------------------------------------------- //
 
     // Go through all RPrims and reallocate their instance ids
-    // This is called once we have exhausted all all 24bit instance ids.
+    // This is called once we have exhausted all 24bit instance ids.
     void _CompactPrimIds();
 
     // Allocate the next available instance id to the prim
@@ -500,6 +506,7 @@ private:
     std::unique_ptr<class HdSceneIndexAdapterSceneDelegate> _siSd;
 
     HdMergingSceneIndexRefPtr _mergingSceneIndex;
+    HdSceneIndexBaseRefPtr _terminalSceneIndex;
 
     struct _TaskInfo {
         HdSceneDelegate *sceneDelegate;

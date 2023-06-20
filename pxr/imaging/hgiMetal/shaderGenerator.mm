@@ -581,7 +581,8 @@ _AccumulateParamsAndBlockParams(
 bool
 _IsTessFunction(const HgiShaderFunctionDesc &descriptor)
 {
-    return descriptor.shaderStage == HgiShaderStagePostTessellationVertex;
+    return descriptor.shaderStage == HgiShaderStagePostTessellationControl ||
+           descriptor.shaderStage == HgiShaderStagePostTessellationVertex;
 }
 
 ShaderStageData::ShaderStageData(
@@ -613,6 +614,8 @@ ShaderStageData::ShaderStageData(
                 generator,
                 descriptor.shaderStage,
                 descriptor.shaderStage == HgiShaderStageVertex
+                || descriptor.shaderStage ==
+                  HgiShaderStagePostTessellationControl
                 || descriptor.shaderStage ==
                   HgiShaderStagePostTessellationVertex)))
     , _outputs(
@@ -777,11 +780,11 @@ ShaderStageData::AccumulateBufferBindings(
     HgiMetalShaderGenerator *generator)
 {
     HgiMetalShaderSectionPtrVector stageShaderSections;
-    int maxBindIndex = 0;
+    uint32_t maxBindIndex = 0;
 
     std::vector<const HgiShaderFunctionBufferDesc*> slots(32, nullptr);
     for (size_t i = 0; i < buffers.size(); i++) {
-        int bindIndex = buffers[i].bindIndex;
+        uint32_t bindIndex = buffers[i].bindIndex;
         maxBindIndex = std::max(maxBindIndex, bindIndex);
         if (maxBindIndex >= slots.size()) {
             slots.resize(slots.size() + 32, nullptr);
@@ -1221,14 +1224,14 @@ _BuildTessAttribute(
 {
     ss << "[[patch(";
     switch (tessDesc.patchType) {
-        case HgiShaderFunctionTessellationDesc::PatchType::Triangle:
+        case HgiShaderFunctionTessellationDesc::PatchType::Triangles:
             ss << "triangle, ";
             break;
-        case HgiShaderFunctionTessellationDesc::PatchType::Quad:
+        case HgiShaderFunctionTessellationDesc::PatchType::Quads:
             ss << "quad, ";
             break;
-            default:
-                TF_CODING_ERROR("Unknown patch type");
+        default:
+            TF_CODING_ERROR("Unknown patch type");
             break;
     }
     ss << tessDesc.numVertsPerPatchIn << ")]]";
@@ -1323,6 +1326,19 @@ HgiMetalShaderGenerator::_BuildShaderStageEntryPoints(
                             "TessVert",
                             "vertex",
                             "tvInput",
+                            functionAttributesSS.str());
+        }
+        case HgiShaderStagePostTessellationControl: {
+            _BuildTessAttribute(functionAttributesSS,
+                                descriptor.tessellationDescriptor);
+            return std::make_unique
+                    <HgiMetalShaderStageEntryPoint>(
+                            stageData,
+                            this,
+                            "ptc",
+                            "TessControl",
+                            "vertex",
+                            "tcInput",
                             functionAttributesSS.str());
         }
         default: {
@@ -1448,7 +1464,8 @@ void HgiMetalShaderGenerator::_Execute(std::ostream &ss)
     HgiMetalStageOutputShaderSection* const outputs =
         _generatorShaderSections->GetOutputs();
     std::stringstream returnSS;
-    if (outputs) {
+    if (outputs &&
+        (_GetShaderStage() != HgiShaderStagePostTessellationControl)) {
         const HgiMetalStructTypeDeclarationShaderSection* const decl =
             outputs->GetStructTypeDeclaration();
         decl->WriteIdentifier(returnSS);
@@ -1513,8 +1530,8 @@ void HgiMetalShaderGenerator::_Execute(std::ostream &ss)
         }
     }
     //return the instance of the shader entrypoint output type
-    if(outputs)
-    {
+    if (outputs &&
+        (_GetShaderStage() != HgiShaderStagePostTessellationControl)) {
         const std::string outputInstanceName =
                 _generatorShaderSections->GetOutputInstanceName();
         ss << "return " << outputInstanceName << ";\n";

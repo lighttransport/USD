@@ -22,6 +22,7 @@
 // language governing permissions and limitations under the Apache License.
 //
 #include "pxr/imaging/hdSt/simpleLightingShader.h"
+#include "pxr/imaging/hdSt/binding.h"
 #include "pxr/imaging/hdSt/textureIdentifier.h"
 #include "pxr/imaging/hdSt/subtextureIdentifier.h"
 #include "pxr/imaging/hdSt/textureObject.h"
@@ -39,7 +40,6 @@
 #include "pxr/imaging/hd/renderDelegate.h"
 #include "pxr/imaging/hd/renderIndex.h"
 #include "pxr/imaging/hd/sceneDelegate.h"
-#include "pxr/imaging/hd/binding.h"
 
 #include "pxr/imaging/hio/glslfx.h"
 
@@ -186,7 +186,7 @@ HdStSimpleLightingShader::UnbindResources(const int program,
 }
 
 void
-HdStSimpleLightingShader::AddBufferBinding(HdBindingRequest const& req)
+HdStSimpleLightingShader::AddBufferBinding(HdStBindingRequest const& req)
 {
     auto it = _customBuffers.insert({req.GetName(), req});
     // Entry already existed and was equal to what we want to set it.
@@ -210,7 +210,7 @@ HdStSimpleLightingShader::ClearBufferBindings()
 
 /*virtual*/
 void
-HdStSimpleLightingShader::AddBindings(HdBindingRequestVector *customBindings)
+HdStSimpleLightingShader::AddBindings(HdStBindingRequestVector *customBindings)
 {
     customBindings->reserve(customBindings->size() + _customBuffers.size() + 1);
     TF_FOR_ALL(it, _customBuffers) {
@@ -657,11 +657,11 @@ HdStSimpleLightingShader::AddResourcesFromTextures(ResourceContext &ctx) const
     const GfVec3i srcDim = srcTexture->GetDescriptor().dimensions;
 
     const unsigned int numPrefilterLevels = 
-        (unsigned int) std::log2(std::max(srcDim[0], srcDim[1]));
+        std::max((unsigned int)(std::log2(std::max(srcDim[0], srcDim[1]))), 1u);
 
     // Prefilter map computations. mipLevel = 0 allocates texture.
     for (unsigned int mipLevel = 0; mipLevel < numPrefilterLevels; ++mipLevel) {
-        const float roughness =
+        const float roughness = (numPrefilterLevels == 1) ? 0.f :
             (float)mipLevel / (float)(numPrefilterLevels - 1);
 
         ctx.AddComputation(

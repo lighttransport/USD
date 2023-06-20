@@ -91,18 +91,6 @@ PcpPrimIndex::PcpPrimIndex()
 {
 }
 
-void 
-PcpPrimIndex::SetGraph(const PcpPrimIndex_GraphRefPtr& graph)
-{
-    _graph = graph;
-}
-
-PcpPrimIndex_GraphPtr
-PcpPrimIndex::GetGraph() const
-{
-    return _graph;
-}
-
 PcpNodeRef
 PcpPrimIndex::GetRootNode() const
 {
@@ -956,7 +944,7 @@ struct Pcp_PrimIndexer
     inline void
     _AddTasksForNodeRecursively(
         const PcpNodeRef& n, 
-        bool skipCompletedNodesForAncestralOpinions,
+        bool skipTasksForExpressedArcs,
         bool skipCompletedNodesForImpliedSpecializes,
         bool isUsd) 
     {
@@ -969,7 +957,7 @@ struct Pcp_PrimIndexer
         TF_FOR_ALL(child, Pcp_GetChildrenRange(n)) {
             _AddTasksForNodeRecursively(
                 *child, 
-                skipCompletedNodesForAncestralOpinions, 
+                skipTasksForExpressedArcs, 
                 skipCompletedNodesForImpliedSpecializes, isUsd);
         }
 
@@ -1000,10 +988,14 @@ struct Pcp_PrimIndexer
             if (evaluateVariants && (arcMask & _ArcFlagVariants)) {
                 AddTask(Task(Task::Type::EvalNodeVariantSets, n));
             }
-            if (!skipCompletedNodesForAncestralOpinions) {
-                // In this case, we only need to add tasks that weren't
-                // evaluated during the recursive prim indexing for
-                // ancestral opinions.
+            if (!skipTasksForExpressedArcs) {
+                // In some cases, we don't want to add the tasks for expressed 
+                // arcs because we're adding nodes from an already composed 
+                // subtree that has already processed these arcs. 
+                // 
+                // These cases include adding a subtree that was recursively 
+                // prim indexed for ancestral opinions or propagating a 
+                // specializes subtree back down to its origin node.
                 if (arcMask & _ArcFlagSpecializes) {
                     AddTask(Task(Task::Type::EvalNodeSpecializes, n));
                 }
@@ -1029,14 +1021,14 @@ struct Pcp_PrimIndexer
     void AddTasksForRootNode(const PcpNodeRef& rootNode) {
         return _AddTasksForNodeRecursively(
             rootNode, 
-            /*skipCompletedNodesForAncestralOpinions=*/false,
+            /*skipTasksForExpressedArcs=*/false,
             /*skipCompletedNodesForImpliedSpecializes=*/false,
             /*isUsd=*/inputs.usd);
     }
 
     void AddTasksForNode(
         const PcpNodeRef& n, 
-        bool skipCompletedNodesForAncestralOpinions,
+        bool skipTasksForExpressedArcs,
         bool skipCompletedNodesForImpliedSpecializes) {
 
         // Any time we add an edge to the graph, we may need to update
@@ -1081,7 +1073,7 @@ struct Pcp_PrimIndexer
         // embedded class hierarchies have already been propagated to
         // the top node n, letting us avoid redundant work.)
         _AddTasksForNodeRecursively(
-            n, skipCompletedNodesForAncestralOpinions, 
+            n, skipTasksForExpressedArcs, 
             skipCompletedNodesForImpliedSpecializes, inputs.usd);
 
         _DebugPrintTasks("After AddTasksForNode");
@@ -1374,12 +1366,13 @@ _AddArc(
     bool includeAncestralOpinions,
     bool skipDuplicateNodes,
     bool skipImpliedSpecializesCompletedNodes,
+    bool skipTasksForExpressedArcs,
     Pcp_PrimIndexer *indexer )
 {
     PCP_INDEXING_PHASE(
         indexer,
         parent, 
-        "Adding new %s arc to %s to %s", 
+        "Adding new %s arc to %s from %s", 
         TfEnum::GetDisplayName(arcType).c_str(),
         Pcp_FormatSite(site).c_str(),
         Pcp_FormatSite(parent.GetSite()).c_str());
@@ -1431,7 +1424,7 @@ _AddArc(
         for (PcpPrimIndex_StackFrameIterator it(parent, indexer->previousFrame);
              it.node; it.NextFrame()) {
 
-            PcpPrimIndex_GraphPtr currentGraph = it.node.GetOwningGraph();
+            PcpPrimIndex_Graph *currentGraph = it.node.GetOwningGraph();
             if (currentGraph->GetNodeUsingSite(siteToAddInCurrentGraph)) {
                 foundDuplicateNode = true;
                 break;
@@ -1650,10 +1643,12 @@ _AddArc(
     //
     // If we evaluated ancestral opinions, it it means the nested
     // call to Pcp_BuildPrimIndex() has already evaluated refs, payloads,
-    // and inherits on this subgraph, so we can skip those tasks.
-    const bool skipAncestralCompletedNodes = includeAncestralOpinions;
+    // and inherits on this subgraph, so we can skip those tasks in this case 
+    // too.
+    skipTasksForExpressedArcs = 
+        skipTasksForExpressedArcs || includeAncestralOpinions;
     indexer->AddTasksForNode(
-        newNode, skipAncestralCompletedNodes, 
+        newNode, skipTasksForExpressedArcs, 
         skipImpliedSpecializesCompletedNodes);
 
     // If the arc targets a site that is itself private, issue an error.
@@ -1717,6 +1712,7 @@ _AddArc(
         includeAncestralOpinions,
         skipDuplicateNodes,
         /* skipImpliedSpecializes = */ false,
+        /* skipTasksForExpressedArcs = */ false,
         indexer);
 }
 
@@ -1808,11 +1804,12 @@ _EvalRefOrPayloadArcs(PcpNodeRef node,
 
         bool fail = false;
 
-        // Verify that the reference or payload targets the default 
-        // reference/payload target or a root prim.
+        // Verify that the reference or payload targets either the default 
+        // reference/payload target, or a prim with an absolute path.
         if (!refOrPayload.GetPrimPath().IsEmpty() &&
             !(refOrPayload.GetPrimPath().IsAbsolutePath() && 
-              refOrPayload.GetPrimPath().IsPrimPath())) {
+              refOrPayload.GetPrimPath().IsPrimPath() &&
+              !refOrPayload.GetPrimPath().ContainsPrimVariantSelection())) {
             PcpErrorInvalidPrimPathPtr err = PcpErrorInvalidPrimPath::New();
             err->rootSite = PcpSite(node.GetRootNode().GetSite());
             err->site = PcpSite(node.GetSite());
@@ -1976,13 +1973,18 @@ _EvalRefOrPayloadArcs(PcpNodeRef node,
         SdfPath const &primPath = defaultPrimPath.IsEmpty() ? 
             refOrPayload.GetPrimPath() : defaultPrimPath;
 
-        // References and payloads only map values under the source path, aka 
-        // the reference root.  Any paths outside the reference root do
-        // not map across.
+        // The mapping for a reference (or payload) arc makes the source
+        // and target map to each other.  Paths outside these will not map,
+        // except for the case of internal references.
         PcpMapExpression mapExpr = 
             _CreateMapExpressionForArc(
                 /* source */ primPath, /* targetNode */ node, 
                 indexer->inputs, layerOffset);
+        if (isInternal) {
+            // Internal references maintain full namespace visibility
+            // outside the source & target.
+            mapExpr = mapExpr.AddRootIdentity();
+        }
 
         // Only need to include ancestral opinions if the prim path is
         // not a root prim.
@@ -2713,15 +2715,31 @@ _AddClassBasedArcs(
     Pcp_PrimIndexer* indexer)
 {
     for (size_t arcNum=0; arcNum < classArcs.size(); ++arcNum) {
+        SdfPath const& arcPath = classArcs[arcNum];
+
         PCP_INDEXING_MSG(indexer, node, "Found %s to <%s>", 
             TfEnum::GetDisplayName(arcType).c_str(),
-            classArcs[arcNum].GetText());
+            arcPath.GetText());
+
+        // Verify that the class-based arc (i.e., inherit or specialize)
+        // targets a prim path, with no variant selection.
+        if (!arcPath.IsEmpty() &&
+            !(arcPath.IsPrimPath() &&
+              !arcPath.ContainsPrimVariantSelection())) {
+            PcpErrorInvalidPrimPathPtr err = PcpErrorInvalidPrimPath::New();
+            err->rootSite = PcpSite(node.GetRootNode().GetSite());
+            err->site = PcpSite(node.GetSite());
+            err->primPath = arcPath;
+            err->arcType = arcType;
+            indexer->RecordError(err);
+            continue;
+        }
 
         // The mapping for a class arc maps the class to the instance.
         // Every other path maps to itself.
         PcpMapExpression mapExpr = 
             _CreateMapExpressionForArc(
-                /* source */ classArcs[arcNum], /* targetNode */ node,
+                /* source */ arcPath, /* targetNode */ node,
                 indexer->inputs)
             .AddRootIdentity();
 
@@ -3120,6 +3138,7 @@ _PropagateNodeToParent(
     PcpNodeRef parentNode,
     PcpNodeRef srcNode,
     bool skipImpliedSpecializes,
+    bool skipTasksForExpressedArcs,
     const PcpMapExpression& mapToParent,
     const PcpNodeRef& srcTreeRoot,
     Pcp_PrimIndexer* indexer)
@@ -3166,6 +3185,7 @@ _PropagateNodeToParent(
                     /* includeAncestralOpinions = */ false,
                     /* skipDuplicateNodes = */ false,
                     skipImpliedSpecializes,
+                    skipTasksForExpressedArcs,
                     indexer);
 
                 createdNewNode = static_cast<bool>(newNode);
@@ -3200,12 +3220,14 @@ _PropagateSpecializesTreeToRoot(
 {
     // Make sure to skip implied specializes tasks for the propagated
     // node. Otherwise, we'll wind up propagating this node back to
-    // its originating subtree, which will leave it inert.
+    // its originating subtree, which will leave it inert. But we still want
+    // to queue the expressed arc tasks for the nodes we propagate to the root.
     const bool skipImpliedSpecializes = true;
+    const bool skipTasksForExpressedArcs = false;
 
     std::pair<PcpNodeRef, bool> newNode = _PropagateNodeToParent(
         parentNode, srcNode,
-        skipImpliedSpecializes,
+        skipImpliedSpecializes, skipTasksForExpressedArcs,
         mapToParent, srcTreeRoot, indexer);
     if (!newNode.first) {
         return;
@@ -3283,34 +3305,20 @@ _PropagateArcsToOrigin(
     // to the origin.  If one of the arcs we propagate back is another
     // specializes arc, we need to ensure that arc is propagated back
     // to the root later on.
+    //
+    // But we DO want to skip any expressed arc tasks as we propagate back to 
+    // the origin so that we can copy the whole subtree (including all direct 
+    // and ancestral arcs) without enqueing new tasks for the propagated nodes
+    // which could lead to duplicate tasks being queued up for the propagated
+    // subtree nodes and failed verifies later on.
+    // See SpecializesAndAncestralArcs museum cases.
     const bool skipImpliedSpecializes = false;
+    const bool skipTasksForExpressedArcs = true;
 
     std::pair<PcpNodeRef, bool> newNode = _PropagateNodeToParent(
-        parentNode, srcNode, skipImpliedSpecializes,
+        parentNode, srcNode, skipImpliedSpecializes, skipTasksForExpressedArcs,
         mapToParent, srcTreeRoot, indexer);
     if (!newNode.first) {
-        return;
-    }
-
-    // If we've propagated the given srcNode back to a new node 
-    // beneath the origin parentNode, it means srcNode represents a
-    // newly-discovered composition arc at this level of namespace.
-    // Instead of propagating the rest of the subtree beneath srcNode
-    // we mark them as inert and allow composition to recompose the 
-    // subtree beneath the newly-created node. This avoids issues with 
-    // duplicate tasks being queued up for the propagated subtree, 
-    // which would lead to failed verifies later on.
-    // See SpecializesAndAncestralArcs museum case.
-    //
-    // XXX: 
-    // This approach keeps the code simple but does cause us to redo
-    // composition work unnecessarily, since recomposing the subgraph
-    // beneath the newly-created node should yield the same result as
-    // the subgraph beneath srcNode. Ideally, we would remove this
-    // code, propagate the entire subgraph beneath srcNode, but find
-    // some way to avoid enqueing tasks for the propagated nodes.
-    if (newNode.second) {
-        _InertSubtree(srcNode);
         return;
     }
 
@@ -4487,7 +4495,7 @@ _BuildInitialPrimIndexFromAncestor(
     }
 
     // Adjust the parent graph for this child.
-    PcpPrimIndex_GraphPtr graph = outputs->primIndex.GetGraph();
+    const PcpPrimIndex_GraphRefPtr &graph = outputs->primIndex.GetGraph();
     graph->AppendChildNameToAllSites(site.path);
 
     // Reset the 'has payload' flag on this prim index.

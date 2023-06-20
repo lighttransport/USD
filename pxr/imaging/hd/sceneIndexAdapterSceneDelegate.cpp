@@ -30,9 +30,12 @@
 #include "pxr/imaging/hd/light.h"
 #include "pxr/imaging/hd/renderBuffer.h"
 #include "pxr/imaging/hd/renderDelegate.h"
+#include "pxr/imaging/hd/renderSettings.h"
 #include "pxr/imaging/hd/tokens.h"
 #include "pxr/imaging/pxOsd/tokens.h"
 #include "pxr/base/trace/trace.h"
+
+#include "pxr/base/arch/vsnprintf.h"
 
 #include "pxr/imaging/hd/dataSourceLegacyPrim.h"
 #include "pxr/imaging/hd/dataSourceLocator.h"
@@ -77,8 +80,11 @@
 #include "pxr/imaging/hd/primvarsSchema.h"
 #include "pxr/imaging/hd/purposeSchema.h"
 #include "pxr/imaging/hd/renderBufferSchema.h"
+#include "pxr/imaging/hd/renderProductSchema.h"
 #include "pxr/imaging/hd/renderSettingsSchema.h"
+#include "pxr/imaging/hd/renderVarSchema.h"
 #include "pxr/imaging/hd/sampleFilterSchema.h"
+#include "pxr/imaging/hd/displayFilterSchema.h"
 #include "pxr/imaging/hd/sphereSchema.h"
 #include "pxr/imaging/hd/subdivisionTagsSchema.h"
 #include "pxr/imaging/hd/visibilitySchema.h"
@@ -100,6 +106,7 @@ TF_DEFINE_PRIVATE_TOKENS(
     ((prmanParamsNames, ""))
 
     ((outputsRiSampleFilters, "outputs:ri:sampleFilters"))
+    ((outputsRiDisplayFilters, "outputs:ri:displayFilters"))
 );
 
 
@@ -134,9 +141,14 @@ HdSceneIndexAdapterSceneDelegate::HdSceneIndexAdapterSceneDelegate(
 , _cachedDirtyBits(0)
 , _cachedPrimType()
 {
+
+    std::string registeredName = ArchStringPrintf(
+        "HdSceneIndexAdapterSceneDelegate scene: %s@%p",
+            delegateID.GetString().c_str(),
+            (void *) parentIndex);
+
     HdSceneIndexNameRegistry::GetInstance().RegisterNamedSceneIndex(
-        "HdSceneIndexAdapterSceneDelegate scene: " + delegateID.GetString(),
-            inputSceneIndex);
+        registeredName, inputSceneIndex);
 
     // XXX: note that we will likely want to move this to the Has-A observer
     // pattern we're using now...
@@ -909,9 +921,6 @@ _Walk(
     visitedSet->insert(nodePath);
 
     TfToken nodePathTk(nodePath.GetToken());
-    if (!nodesDS->Has(nodePathTk)){ 
-        return;
-    }
 
     HdDataSourceBaseHandle nodeDS = nodesDS->Get(nodePathTk);
     HdMaterialNodeSchema nodeSchema(HdContainerDataSource::Cast(nodeDS));
@@ -1225,7 +1234,8 @@ _GetLightParamValueFromMaterial(
     if (paramName == HdTokens->filters
             || paramName == HdTokens->lightLink
             || paramName == HdTokens->shadowLink
-            || paramName == HdTokens->lightFilterLink) {
+            || paramName == HdTokens->lightFilterLink
+            || paramName == HdTokens->isLight) {
         return VtValue();
     }
 
@@ -1295,7 +1305,130 @@ HdSceneIndexAdapterSceneDelegate::GetLightParamValue(
     return result;
 }
 
-static VtValue
+namespace {
+// Note: Utility methods below expect a valid data source handle.
+
+VtDictionary
+_ToDictionary(HdContainerDataSourceHandle const &cds)
+{
+    VtDictionary dict;
+    for (const TfToken &name : cds->GetNames()) {
+        if (HdSampledDataSourceHandle valueDs =
+                HdSampledDataSource::Cast(cds->Get(name))) {
+            dict[name.GetString()] = valueDs->GetValue(0);
+        }
+    }
+    return dict;
+}
+
+using _RenderVar = HdRenderSettings::RenderProduct::RenderVar;
+using _RenderVars = std::vector<_RenderVar>;
+_RenderVars
+_ToRenderVars(HdRenderVarVectorSchema vars)
+{
+    _RenderVars hdVars;
+    const HdVectorDataSourceHandle vds = vars.GetVector();
+    const size_t numVars = vds->GetNumElements();
+    hdVars.reserve(numVars);
+
+    for (size_t idx = 0; idx < numVars; idx++) {
+        HdRenderVarSchema rvSchema(HdContainerDataSource::Cast(
+            vds->GetElement(idx)));
+        
+        if (rvSchema) {
+            _RenderVar hdVar;
+            if (auto h = rvSchema.GetPath()) {
+                hdVar.varPath = h->GetTypedValue(0);
+            }
+            if (auto h = rvSchema.GetDataType()) {
+                hdVar.dataType = h->GetTypedValue(0);
+            }
+            if (auto h = rvSchema.GetSourceName()) {
+                hdVar.sourceName = h->GetTypedValue(0);
+            }
+            if (auto h = rvSchema.GetSourceType()) {
+                hdVar.sourceType = h->GetTypedValue(0);
+            }
+            if (auto h = rvSchema.GetNamespacedSettings()) {
+                hdVar.namespacedSettings = _ToDictionary(h);
+            }
+            hdVars.push_back(std::move(hdVar));
+        }
+    }
+
+    return hdVars;
+}
+
+GfRange2f
+_ToRange2f(GfVec4f const &v)
+{
+    return GfRange2f(GfVec2f(v[0], v[1]), GfVec2f(v[2],v[3]));
+}
+
+HdRenderSettings::RenderProducts
+_ToRenderProducts(HdRenderProductVectorSchema products)
+{
+    const HdVectorDataSourceHandle vds = products.GetVector();
+    if (!vds) {
+        return HdRenderSettings::RenderProducts();
+    }
+
+    const size_t numProducts = vds->GetNumElements();
+    HdRenderSettings::RenderProducts hdProducts;
+    hdProducts.reserve(numProducts);
+
+    for (size_t idx = 0; idx < numProducts; idx++) {
+        
+        HdRenderProductSchema rpSchema(HdContainerDataSource::Cast(
+            vds->GetElement(idx)));
+        
+        if (rpSchema) {
+            HdRenderSettings::RenderProduct hdProd;
+            if (auto h = rpSchema.GetPath()) {
+                hdProd.productPath = h->GetTypedValue(0);
+            }
+            if (auto h = rpSchema.GetType()) {
+                hdProd.type = h->GetTypedValue(0);
+            }
+            if (auto h = rpSchema.GetName()) {
+                hdProd.name = h->GetTypedValue(0);
+            }
+            if (auto h = rpSchema.GetResolution()) {
+                hdProd.resolution = h->GetTypedValue(0);
+            }
+            if (auto h = rpSchema.GetRenderVars()) {
+                hdProd.renderVars = _ToRenderVars(h);
+            }
+            if (auto h = rpSchema.GetCameraPrim()) {
+                hdProd.cameraPath = h->GetTypedValue(0);
+            }
+            if (auto h = rpSchema.GetPixelAspectRatio()) {
+                hdProd.pixelAspectRatio = h->GetTypedValue(0);
+            }
+            if (auto h = rpSchema.GetAspectRatioConformPolicy()) {
+                hdProd.aspectRatioConformPolicy = h->GetTypedValue(0);
+            }
+            if (auto h = rpSchema.GetApertureSize()) {
+                hdProd.apertureSize = h->GetTypedValue(0);
+            }
+            if (auto h = rpSchema.GetDataWindowNDC()) {
+                hdProd.dataWindowNDC = _ToRange2f(h->GetTypedValue(0));
+            }
+            if (auto h = rpSchema.GetDisableMotionBlur()) {
+                hdProd.disableMotionBlur = h->GetTypedValue(0);
+            }
+            if (auto h = rpSchema.GetNamespacedSettings()) {
+                hdProd.namespacedSettings = _ToDictionary(h);
+            }
+
+            hdProducts.push_back(std::move(hdProd));
+        }
+    }
+
+    return hdProducts;
+}
+
+VtValue
 _GetRenderSettings(HdSceneIndexPrim prim, TfToken const &key)
 {
     HdContainerDataSourceHandle renderSettingsDs =
@@ -1305,40 +1438,64 @@ _GetRenderSettings(HdSceneIndexPrim prim, TfToken const &key)
         return VtValue();
     }
 
-    if (key == _tokens->outputsRiSampleFilters) {
-        HdSampledDataSourceHandle valueDs =
-            HdSampledDataSource::Cast(renderSettingsDs->Get(
-                HdRenderSettingsSchemaTokens->sampleFilters));
-        if (!valueDs) {
-            return VtValue();
-        }
+    HdRenderSettingsSchema rsSchema = HdRenderSettingsSchema(renderSettingsDs);
+    if (!rsSchema.IsDefined()) {
+        return VtValue();
+    }
 
-        VtValue pathArrayValue = valueDs->GetValue(0);
-        if (pathArrayValue.IsHolding<VtArray<SdfPath>>()) {
-            VtArray<SdfPath> pathArray =
-                pathArrayValue.UncheckedGet<VtArray<SdfPath>>();
-            SdfPathVector pathVector(pathArray.cbegin(), pathArray.cend());
-            return VtValue(pathVector);
+    if (key == HdRenderSettingsPrimTokens->namespacedSettings) {
+        VtDictionary settings;
+        if (HdContainerDataSourceHandle namespacedSettingsDs = 
+                rsSchema.GetNamespacedSettings()) {
+
+            return VtValue(_ToDictionary(namespacedSettingsDs));
         }
     }
+    
+    if (key == HdRenderSettingsPrimTokens->active) {
+        if (HdBoolDataSourceHandle activeDS = rsSchema.GetActive()) {
+            return VtValue(activeDS->GetTypedValue(0));
+        }
+        return VtValue(false);
+    }
+
+    if (key == HdRenderSettingsPrimTokens->renderProducts) {
+        if (HdRenderProductVectorSchema products =
+                rsSchema.GetRenderProducts()) {
+            
+            return VtValue(_ToRenderProducts(products));
+        }
+    }
+
+    if (key == HdRenderSettingsPrimTokens->includedPurposes) {
+        if (HdTokenArrayDataSourceHandle purposesDS =
+                rsSchema.GetIncludedPurposes()) {
+            
+            return VtValue(purposesDS->GetTypedValue(0));
+        }
+    }
+
+    if (key == HdRenderSettingsPrimTokens->materialBindingPurposes) {
+        if (HdTokenArrayDataSourceHandle purposesDS =
+                rsSchema.GetMaterialBindingPurposes()) {
+            
+            return VtValue(purposesDS->GetTypedValue(0));
+        }
+    }
+
+    if (key == HdRenderSettingsPrimTokens->renderingColorSpace) {
+        if (HdTokenDataSourceHandle colorSpaceDS =
+                rsSchema.GetRenderingColorSpace()) {
+            
+            return VtValue(colorSpaceDS->GetTypedValue(0));
+        }
+    }
+
     return VtValue();
 }
 
-static VtValue
-_GetSampleFilterResource(HdSceneIndexPrim prim)
-{
-    TRACE_FUNCTION();
-
-    HdSampleFilterSchema filterSchema =
-        HdSampleFilterSchema::GetFromParent(prim.dataSource);
-    if (!filterSchema.IsDefined()) {
-        return VtValue();
-    }
-    HdMaterialNodeSchema nodeSchema = filterSchema.GetSampleFilterResource();
-    if (!nodeSchema.IsDefined()) {
-        return VtValue();
-    }
-
+VtValue
+_ToOutputFilterResource(HdMaterialNodeSchema &nodeSchema) {
     // Convert HdDataSource with material node data to a HdMaterialNode2
     HdMaterialNode2 hdNode2;
     HdTokenDataSourceHandle nodeTypeDS = nodeSchema.GetNodeIdentifier();
@@ -1365,7 +1522,43 @@ _GetSampleFilterResource(HdSceneIndexPrim prim)
     return VtValue(hdNode2);
 }
 
-static
+VtValue
+_GetSampleFilterResource(HdSceneIndexPrim prim)
+{
+    TRACE_FUNCTION();
+
+    HdSampleFilterSchema filterSchema = 
+        HdSampleFilterSchema::GetFromParent(prim.dataSource);
+    if (!filterSchema.IsDefined()) {
+        return VtValue();
+    }
+    HdMaterialNodeSchema nodeSchema = filterSchema.GetSampleFilterResource();
+    if (!nodeSchema.IsDefined()) {
+        return VtValue();
+    }
+
+    return _ToOutputFilterResource(nodeSchema);
+}
+
+
+VtValue
+_GetDisplayFilterResource(HdSceneIndexPrim prim)
+{
+    TRACE_FUNCTION();
+
+    HdDisplayFilterSchema filterSchema =
+        HdDisplayFilterSchema::GetFromParent(prim.dataSource);
+    if (!filterSchema.IsDefined()) {
+        return VtValue();
+    }
+    HdMaterialNodeSchema nodeSchema = filterSchema.GetDisplayFilterResource();
+    if (!nodeSchema.IsDefined()) {
+        return VtValue();
+    }
+
+    return _ToOutputFilterResource(nodeSchema);
+}
+
 HdInterpolation
 Hd_InterpolationAsEnum(const TfToken &interpolationToken)
 {
@@ -1386,6 +1579,7 @@ Hd_InterpolationAsEnum(const TfToken &interpolationToken)
     return HdInterpolation(-1);
 }
 
+} // anonymous namespace
 
 HdPrimvarDescriptorVector
 HdSceneIndexAdapterSceneDelegate::GetPrimvarDescriptors(
@@ -1611,12 +1805,10 @@ HdSceneIndexAdapterSceneDelegate::Get(SdfPath const &id, TfToken const &key)
         if (HdContainerDataSourceHandle drawTarget =
                 HdContainerDataSource::Cast(
                     prim.dataSource->Get(HdPrimTypeTokens->drawTarget))) {
-            if (drawTarget->Has(key)) {
-                if (HdSampledDataSourceHandle valueDs =
-                        HdSampledDataSource::Cast(drawTarget->Get(key))) {
-                    return valueDs->GetValue(0.0f);
-                } 
-            }
+            if (HdSampledDataSourceHandle valueDs =
+                    HdSampledDataSource::Cast(drawTarget->Get(key))) {
+                return valueDs->GetValue(0.0f);
+            } 
         }
 
         return VtValue();
@@ -1647,11 +1839,9 @@ HdSceneIndexAdapterSceneDelegate::Get(SdfPath const &id, TfToken const &key)
                 HdContainerDataSource::Cast(
                     prim.dataSource->Get(
                         HdRenderBufferSchemaTokens->renderBuffer))) {
-            if (renderBuffer->Has(key)) {
-                if (HdSampledDataSourceHandle valueDs =
-                        HdSampledDataSource::Cast(renderBuffer->Get(key))) {
-                    return valueDs->GetValue(0);
-                }
+            if (HdSampledDataSourceHandle valueDs =
+                    HdSampledDataSource::Cast(renderBuffer->Get(key))) {
+                return valueDs->GetValue(0);
             }
         }
 
@@ -1660,7 +1850,7 @@ HdSceneIndexAdapterSceneDelegate::Get(SdfPath const &id, TfToken const &key)
 
     // renderSettings usd of Get().
     if (prim.primType == HdPrimTypeTokens->renderSettings) {
-        _GetRenderSettings(prim, key);
+        return _GetRenderSettings(prim, key);
     }
 
     // sampleFilter usd of Get().
@@ -1671,15 +1861,20 @@ HdSceneIndexAdapterSceneDelegate::Get(SdfPath const &id, TfToken const &key)
         return VtValue();
     }
 
+    if (prim.primType == HdPrimTypeTokens->displayFilter) {
+        if (key == HdDisplayFilterSchemaTokens->displayFilterResource) {
+            return _GetDisplayFilterResource(prim);
+        }
+        return VtValue();
+    }
+
     if (prim.primType == HdPrimTypeTokens->cube) {
         if (HdContainerDataSourceHandle cubeSrc =
                 HdContainerDataSource::Cast(
                     prim.dataSource->Get(HdCubeSchemaTokens->cube))) {
-            if (cubeSrc->Has(key)) {
-                if (HdSampledDataSourceHandle valueSrc =
-                        HdSampledDataSource::Cast(cubeSrc->Get(key))) {
-                    return valueSrc->GetValue(0);
-                }
+            if (HdSampledDataSourceHandle valueSrc =
+                    HdSampledDataSource::Cast(cubeSrc->Get(key))) {
+                return valueSrc->GetValue(0);
             }
         }
     }
@@ -1688,11 +1883,9 @@ HdSceneIndexAdapterSceneDelegate::Get(SdfPath const &id, TfToken const &key)
         if (HdContainerDataSourceHandle sphereSrc =
                 HdContainerDataSource::Cast(
                     prim.dataSource->Get(HdSphereSchemaTokens->sphere))) {
-            if (sphereSrc->Has(key)) {
-                if (HdSampledDataSourceHandle valueSrc =
-                        HdSampledDataSource::Cast(sphereSrc->Get(key))) {
-                    return valueSrc->GetValue(0);
-                }
+            if (HdSampledDataSourceHandle valueSrc =
+                    HdSampledDataSource::Cast(sphereSrc->Get(key))) {
+                return valueSrc->GetValue(0);
             }
         }
     }
@@ -1701,11 +1894,9 @@ HdSceneIndexAdapterSceneDelegate::Get(SdfPath const &id, TfToken const &key)
         if (HdContainerDataSourceHandle cylinderSrc =
                 HdContainerDataSource::Cast(
                     prim.dataSource->Get(HdCylinderSchemaTokens->cylinder))) {
-            if (cylinderSrc->Has(key)) {
-                if (HdSampledDataSourceHandle valueSrc =
-                        HdSampledDataSource::Cast(cylinderSrc->Get(key))) {
-                    return valueSrc->GetValue(0);
-                }
+            if (HdSampledDataSourceHandle valueSrc =
+                    HdSampledDataSource::Cast(cylinderSrc->Get(key))) {
+                return valueSrc->GetValue(0);
             }
         }
     }
@@ -1714,11 +1905,9 @@ HdSceneIndexAdapterSceneDelegate::Get(SdfPath const &id, TfToken const &key)
         if (HdContainerDataSourceHandle coneSrc =
                 HdContainerDataSource::Cast(
                     prim.dataSource->Get(HdConeSchemaTokens->cone))) {
-            if (coneSrc->Has(key)) {
-                if (HdSampledDataSourceHandle valueSrc =
-                        HdSampledDataSource::Cast(coneSrc->Get(key))) {
-                    return valueSrc->GetValue(0);
-                }
+            if (HdSampledDataSourceHandle valueSrc =
+                    HdSampledDataSource::Cast(coneSrc->Get(key))) {
+                return valueSrc->GetValue(0);
             }
         }
     }
@@ -1727,19 +1916,17 @@ HdSceneIndexAdapterSceneDelegate::Get(SdfPath const &id, TfToken const &key)
         if (HdContainerDataSourceHandle capsuleSrc =
                 HdContainerDataSource::Cast(
                     prim.dataSource->Get(HdCapsuleSchemaTokens->capsule))) {
-            if (capsuleSrc->Has(key)) {
-                if (HdSampledDataSourceHandle valueSrc =
-                        HdSampledDataSource::Cast(capsuleSrc->Get(key))) {
-                    return valueSrc->GetValue(0);
-                }
+            if (HdSampledDataSourceHandle valueSrc =
+                    HdSampledDataSource::Cast(capsuleSrc->Get(key))) {
+                return valueSrc->GetValue(0);
             }
         }
     }
 
     // "primvars" use of Get()
-    if (HdContainerDataSource::Cast(prim.dataSource)->Has(
-            HdPrimvarsSchemaTokens->primvars)) {
-        return _GetPrimvar(id, key, nullptr);
+    if (HdPrimvarsSchema primvars =
+            HdPrimvarsSchema::GetFromParent(prim.dataSource)) {
+        return _GetPrimvar(primvars.GetContainer(), key, nullptr);
     }
 
     // Fallback for unknown prim conventions provided by emulated scene
@@ -1777,8 +1964,21 @@ HdSceneIndexAdapterSceneDelegate::_GetPrimvar(SdfPath const &id,
         return VtValue();
     }
 
-    if (HdPrimvarsSchema primvars = HdPrimvarsSchema::GetFromParent(
-            prim.dataSource)) {
+    return _GetPrimvar(
+        HdPrimvarsSchema::GetFromParent(prim.dataSource).GetContainer(),
+            key, outIndices);
+
+    return VtValue();
+}
+
+VtValue
+HdSceneIndexAdapterSceneDelegate::_GetPrimvar(
+        const HdContainerDataSourceHandle &primvarsDataSource,
+        TfToken const &key,
+        VtIntArray *outIndices)
+{
+    HdPrimvarsSchema primvars(primvarsDataSource);
+    if (primvars) {
         if (HdPrimvarSchema primvar = primvars.GetPrimvar(key)) {
             
             if (outIndices) {
@@ -1883,7 +2083,7 @@ HdSceneIndexAdapterSceneDelegate::_SamplePrimvar(
     //
     // If the input prim is a datasource prim, we need some sensible default
     // here...  For now, we pass [0,0] to turn off multisampling.
-    if (prim.dataSource->Has(HdSceneIndexEmulationTokens->sceneDelegate)) {
+    if (prim.dataSource->Get(HdSceneIndexEmulationTokens->sceneDelegate)) {
         valueSource->GetContributingSampleTimesForInterval(
                 std::numeric_limits<float>::lowest(),
                 std::numeric_limits<float>::max(), &times);
@@ -1989,7 +2189,7 @@ HdSceneIndexAdapterSceneDelegate::SampleTransform(
     //
     // If the input prim is a datasource prim, we need some sensible default
     // here...  For now, we pass [0,0] to turn off multisampling.
-    if (prim.dataSource->Has(HdSceneIndexEmulationTokens->sceneDelegate)) {
+    if (prim.dataSource->Get(HdSceneIndexEmulationTokens->sceneDelegate)) {
         matrixSource->GetContributingSampleTimesForInterval(
                 std::numeric_limits<float>::lowest(),
                 std::numeric_limits<float>::max(), &times);
@@ -2223,7 +2423,7 @@ HdSceneIndexAdapterSceneDelegate::SampleExtComputationInput(
     //
     // If the input prim is a datasource prim, we need some sensible default
     // here...  For now, we pass [0,0] to turn off multisampling.
-    if (prim.dataSource->Has(HdSceneIndexEmulationTokens->sceneDelegate)) {
+    if (prim.dataSource->Get(HdSceneIndexEmulationTokens->sceneDelegate)) {
         valueDs->GetContributingSampleTimesForInterval(
                 std::numeric_limits<float>::lowest(),
                 std::numeric_limits<float>::max(), &times);

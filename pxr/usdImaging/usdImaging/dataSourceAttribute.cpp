@@ -62,17 +62,25 @@ static _FactoryMap _CreateFactoryMap()
     map[SdfValueTypeNames->Float2] = _FactoryImpl<GfVec2f>;
     map[SdfValueTypeNames->Float3Array] = _FactoryImpl<VtArray<GfVec3f>>;
     map[SdfValueTypeNames->Float3] = _FactoryImpl<GfVec3f>;
+    map[SdfValueTypeNames->Float4] = _FactoryImpl<GfVec4f>;
     map[SdfValueTypeNames->Float4Array] = _FactoryImpl<VtArray<GfVec4f>>;
     map[SdfValueTypeNames->FloatArray] = _FactoryImpl<VtArray<float>>;
     map[SdfValueTypeNames->Float] = _FactoryImpl<float>;
     map[SdfValueTypeNames->IntArray] = _FactoryImpl<VtArray<int>>;
     map[SdfValueTypeNames->Int] = _FactoryImpl<int>;
+    map[SdfValueTypeNames->Int2] = _FactoryImpl<GfVec2i>;
     map[SdfValueTypeNames->Matrix4dArray] = _FactoryImpl<VtArray<GfMatrix4d>>;
     map[SdfValueTypeNames->Matrix4d] = _FactoryImpl<GfMatrix4d>;
     map[SdfValueTypeNames->Normal3fArray] = _FactoryImpl<VtArray<GfVec3f>>;
     map[SdfValueTypeNames->Normal3f] = _FactoryImpl<GfVec3f>;
     map[SdfValueTypeNames->Point3fArray] = _FactoryImpl<VtArray<GfVec3f>>;
     map[SdfValueTypeNames->Point3f] = _FactoryImpl<GfVec3f>;
+    map[SdfValueTypeNames->Quath] = _FactoryImpl<GfQuath>;
+    map[SdfValueTypeNames->QuathArray] = _FactoryImpl<VtArray<GfQuath>>;
+    map[SdfValueTypeNames->Quatf] = _FactoryImpl<GfQuatf>;
+    map[SdfValueTypeNames->QuatfArray] = _FactoryImpl<VtArray<GfQuatf>>;
+    map[SdfValueTypeNames->Quatd] = _FactoryImpl<GfQuatd>;
+    map[SdfValueTypeNames->QuatdArray] = _FactoryImpl<VtArray<GfQuatd>>;
     map[SdfValueTypeNames->StringArray] = _FactoryImpl<VtArray<std::string>>;
     map[SdfValueTypeNames->String] = _FactoryImpl<std::string>;
     map[SdfValueTypeNames->TexCoord2dArray] = _FactoryImpl<VtArray<GfVec2d>>;
@@ -88,12 +96,9 @@ static _FactoryMap _CreateFactoryMap()
     map[SdfValueTypeNames->TexCoord3hArray] = _FactoryImpl<VtArray<GfVec3h>>;
     map[SdfValueTypeNames->TexCoord3h] = _FactoryImpl<GfVec3h>;
     map[SdfValueTypeNames->Token] = _FactoryImpl<TfToken>;
-    map[SdfValueTypeNames->Quath] = _FactoryImpl<GfQuath>;
-    map[SdfValueTypeNames->QuathArray] = _FactoryImpl<VtArray<GfQuath>>;
-    map[SdfValueTypeNames->Quatf] = _FactoryImpl<GfQuatf>;
-    map[SdfValueTypeNames->QuatfArray] = _FactoryImpl<VtArray<GfQuatf>>;
-    map[SdfValueTypeNames->Quatd] = _FactoryImpl<GfQuatd>;
-    map[SdfValueTypeNames->QuatdArray] = _FactoryImpl<VtArray<GfQuatd>>;
+    map[SdfValueTypeNames->TokenArray] = _FactoryImpl<VtArray<TfToken>>;
+    map[SdfValueTypeNames->Vector3fArray] = _FactoryImpl<VtArray<GfVec3f>>;
+    map[SdfValueTypeNames->Vector3f] = _FactoryImpl<GfVec3f>;
 
     return map;
 }

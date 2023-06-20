@@ -41,6 +41,11 @@ def _Err(msg):
 def _SetupOpenGLContext(width=100, height=100):
     try:
         from PySide6.QtOpenGLWidgets import QOpenGLWidget
+        from PySide6.QtOpenGL import QOpenGLFramebufferObject
+        from PySide6.QtOpenGL import QOpenGLFramebufferObjectFormat
+        from PySide6.QtCore import QSize
+        from PySide6.QtGui import QOffscreenSurface
+        from PySide6.QtGui import QOpenGLContext
         from PySide6.QtGui import QSurfaceFormat
         from PySide6.QtWidgets import QApplication
         PySideModule = 'PySide6'
@@ -59,20 +64,37 @@ def _SetupOpenGLContext(width=100, height=100):
     if PySideModule == 'PySide6':
         glFormat = QSurfaceFormat()
         glFormat.setSamples(4)
-        glWidget = QOpenGLWidget()
+
+        # Create an off-screen surface and bind a gl context to it.
+        glWidget = QOffscreenSurface()
         glWidget.setFormat(glFormat)
+        glWidget.create()
+
+        glWidget._offscreenContext = QOpenGLContext()
+        glWidget._offscreenContext.setFormat(glFormat)
+        glWidget._offscreenContext.create()
+
+        glWidget._offscreenContext.makeCurrent(glWidget)
+
+        # Create and bind a framebuffer for the frameRecorder's present task.
+        # Since the frameRecorder uses AOVs directly, this is just
+        # a 1x1 default format FBO.
+        glFBOFormat = QOpenGLFramebufferObjectFormat()
+        glWidget._fbo = QOpenGLFramebufferObject(QSize(1, 1), glFBOFormat)
+        glWidget._fbo.bind()
+
     else:
         glFormat = QtOpenGL.QGLFormat()
         glFormat.setSampleBuffers(True)
         glFormat.setSamples(4)
         glWidget = QtOpenGL.QGLWidget(glFormat)
 
-    glWidget.setFixedSize(width, height)
+        glWidget.setFixedSize(width, height)
 
-    # note that we need to bind the gl context here, instead of explicitly
-    # showing the glWidget. Binding the gl context will make sure framebuffer is
-    # ready for gl operations.
-    glWidget.makeCurrent()
+        # note that we need to bind the gl context here, instead of explicitly
+        # showing the glWidget. Binding the gl context will make sure
+        # framebuffer is ready for gl operations.
+        glWidget.makeCurrent()
 
     return glWidget
 
@@ -108,6 +130,16 @@ def main():
             'so you need specify only the *additional* purposes.  If you want '
             'more than one extra purpose, either use commas with no spaces or '
             'quote the argument and separate purposes by commas and/or spaces.'))
+
+    # Note: The argument passed via the command line (disableGpu) is inverted
+    # from the variable in which it is stored (gpuEnabled).
+    parser.add_argument('--disableGpu', action='store_false',
+        dest='gpuEnabled',
+        help=(
+            'Indicates if the GPU should not be used for rendering. If set '
+            'this not only restricts renderers to those which only run on '
+            'the CPU, but additionally it will prevent any tasks that require '
+            'the GPU from being invoked.'))
 
     UsdAppUtils.cameraArgs.AddCmdlineArgs(parser)
     UsdAppUtils.framesArgs.AddCmdlineArgs(parser)
@@ -149,16 +181,18 @@ def main():
     # Get the camera at the given path (or with the given name).
     usdCamera = UsdAppUtils.GetCameraAtPath(usdStage, args.camera)
 
-    # Frame-independent initialization.
-    # Note that the size of the widget doesn't actually affect the size of the
-    # output image. We just pass it along for cleanliness.
-    glWidget = _SetupOpenGLContext(args.imageWidth, args.imageWidth)
+    if args.gpuEnabled:
+        # UsdAppUtils.FrameRecorder will expect that an OpenGL context has
+        # been created and made current if the GPU is enabled.
+        #
+        # Frame-independent initialization.
+        # Note that the size of the widget doesn't actually affect the size of
+        # the output image. We just pass it along for cleanliness.
+        glWidget = _SetupOpenGLContext(args.imageWidth, args.imageWidth)
 
-    frameRecorder = UsdAppUtils.FrameRecorder()
-    if args.rendererPlugin:
-        frameRecorder.SetRendererPlugin(
-            UsdAppUtils.rendererArgs.GetPluginIdFromArgument(
-                args.rendererPlugin))
+    rendererPluginId = UsdAppUtils.rendererArgs.GetPluginIdFromArgument(
+        args.rendererPlugin) or ''
+    frameRecorder = UsdAppUtils.FrameRecorder(rendererPluginId, args.gpuEnabled)
     frameRecorder.SetImageWidth(args.imageWidth)
     frameRecorder.SetComplexity(args.complexity.value)
     frameRecorder.SetColorCorrectionMode(args.colorCorrectionMode)

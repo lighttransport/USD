@@ -11,6 +11,8 @@ pxr_library(usdImaging
         work
         geomUtil
         hd
+        hdar
+        hio
         pxOsd
         sdf
         usd
@@ -39,10 +41,15 @@ pxr_library(usdImaging
         dataSourcePrim
         dataSourcePrimvars
         dataSourceRelationship
+        dataSourceRenderPrims
+        dataSourceStage
         dataSourceStageGlobals
+        dataSourceUsdPrimInfo
         dataSourceVolume
         debugCodes
         delegate
+        drawModeAdapter
+        drawModeSceneIndex
         indexProxy
         materialParamUtils
         modelSchema
@@ -50,6 +57,7 @@ pxr_library(usdImaging
         resolvedAttributeCache
         instancerContext
         stageSceneIndex
+        selectionSceneIndex
         tokens
         apiSchemaAdapter
         basisCurvesAdapter
@@ -58,10 +66,12 @@ pxr_library(usdImaging
         collectionAPIAdapter
         coneAdapter
         coordSysAdapter
+        coordSysAPIAdapter
         cubeAdapter
         cylinderAdapter
         cylinderLightAdapter
         diskLightAdapter
+        displayFilterAdapter
         distantLightAdapter
         domeLightAdapter
         fieldAdapter
@@ -76,8 +86,10 @@ pxr_library(usdImaging
         materialAdapter
         materialBindingAPIAdapter
         meshAdapter
+        niPrototypePropagatingSceneIndex
         nurbsCurvesAdapter
         nurbsPatchAdapter
+        piPrototypePropagatingSceneIndex
         planeAdapter
         pluginLightAdapter
         pluginLightFilterAdapter
@@ -86,13 +98,29 @@ pxr_library(usdImaging
         portalLightAdapter
         primAdapter
         primvarDescCache
+        usdPrimInfoSchema
+        usdRenderProductSchema
+        usdRenderSettingsSchema
+        usdRenderVarSchema
         rectLightAdapter
+        renderProductAdapter
         renderSettingsAdapter
+        renderSettingsFlatteningSceneIndex
+        renderVarAdapter
+        representedByAncestorPrimAdapter
+        rerootingSceneIndex
         sampleFilterAdapter
         sphereAdapter
         sphereLightAdapter
         textureUtils
         volumeAdapter
+
+    PRIVATE_CLASSES
+        drawModeStandin
+        niInstanceAggregationSceneIndex
+        niPrototypePruningSceneIndex
+        niPrototypeSceneIndex
+        piPrototypeSceneIndex
 
     PUBLIC_HEADERS
         api.h

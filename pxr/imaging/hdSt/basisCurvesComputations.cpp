@@ -285,8 +285,8 @@ HdSt_BasisCurvesIndexBuilderComputation::_BuildCubicIndexArray()
             // catmull-rom. This generates 2 segments each at the start and end
             // of each curve for bspline and 1 for catmull-rom curves.
             if (start) {
-                const int &v0 = startIndex;
-                const int endIndex = v0 + cvCount;
+                const int v0 = startIndex;
+                const int endIndex = v0 + cvCount - 1;
                 const int v1 = std::min(v0 + 1, endIndex);
                 const int v2 = std::min(v0 + 2, endIndex);
 
@@ -299,15 +299,14 @@ HdSt_BasisCurvesIndexBuilderComputation::_BuildCubicIndexArray()
                 primIndices.push_back(curveIndex);
 
             } else {
-                GfVec4i const &lastSeg = indices.back();
-                const int &vn  = lastSeg[3];
-                const int &vn1 = lastSeg[2];
-                const int &vn2 = lastSeg[1];
-                indices.push_back(GfVec4i(vn2, vn1, vn, vn));
+                const GfVec4i lastSeg = indices.back();
+                indices.push_back(GfVec4i(lastSeg[1], lastSeg[2],
+                                          lastSeg[3], lastSeg[3]));
                 primIndices.push_back(curveIndex);
 
                 if (basis == HdTokens->bSpline) {
-                    indices.push_back(GfVec4i(vn1, vn, vn, vn));
+                    indices.push_back(GfVec4i(lastSeg[2], lastSeg[3],
+                                              lastSeg[3], lastSeg[3]));
                     primIndices.push_back(curveIndex);
                 }
             }
@@ -315,14 +314,21 @@ HdSt_BasisCurvesIndexBuilderComputation::_BuildCubicIndexArray()
 
     int vertexIndex = 0;
     int curveIndex = 0;
-    TF_FOR_ALL(itCounts, vertexCounts) {
-        const int count = *itCounts;
+    for (const int &count : vertexCounts) {
+        if (count < 2) {
+            // Minimum vertex count is 2 for pinned curves and 4 otherwise.
+            continue;
+        }
 
         // If we're closing the curve, make sure that we have enough
         // segments to wrap all the way back to the beginning.
         // Note that the value calculated  does _not_ account for the additional
         // segments for pinned (non-periodic) curves.
-        const int numSegs = periodic? count / vStep : ((count - 4) / vStep) + 1;
+        // (this should match the logic in
+        //  HdBasisCurvesTopology::CalculateNeededNumberOfVaryingControlPoints)
+        const int numSegs = periodic?
+            std::max<int>(count / vStep, 1) :
+            (std::max<int>((count - 4), 0) / vStep) + 1;
 
         if (pinned) {
             addPinnedSegment(vertexIndex, curveIndex, count, /*start =*/ true);
@@ -338,7 +344,7 @@ HdSt_BasisCurvesIndexBuilderComputation::_BuildCubicIndexArray()
                 // just repeat the last vert.
                 seg[v] = periodic 
                     ? vertexIndex + ((offset + v) % count)
-                    : vertexIndex + std::min(offset + v, (count -1));
+                    : vertexIndex + std::min(offset + v, (count - 1));
             }
             indices.push_back(seg);
             primIndices.push_back(curveIndex);

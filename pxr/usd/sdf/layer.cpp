@@ -216,6 +216,8 @@ SdfLayer::SdfLayer(
 
 SdfLayer::~SdfLayer()
 {
+    TF_PY_ALLOW_THREADS_IN_SCOPE();
+
     TF_DEBUG(SDF_LAYER).Msg(
         "SdfLayer::~SdfLayer('%s')\n", GetIdentifier().c_str());
 
@@ -385,6 +387,7 @@ SdfLayer::_CreateAnonymousWithFormat(
         return SdfLayerRefPtr();
     }
 
+    TF_PY_ALLOW_THREADS_IN_SCOPE();
     tbb::queuing_rw_mutex::scoped_lock lock(_GetLayerRegistryMutex());
 
     SdfLayerRefPtr layer =
@@ -604,6 +607,7 @@ SdfLayer::_CreateNew(
     // registry mutex lock before destroying the layer.
     SdfLayerRefPtr layer;
     {
+        TF_PY_ALLOW_THREADS_IN_SCOPE();
         tbb::queuing_rw_mutex::scoped_lock lock(_GetLayerRegistryMutex());
 
         // Check for existing layer with this identifier.
@@ -667,12 +671,13 @@ struct SdfLayer::_FindOrOpenLayerInfo
     // Whether this layer is anonymous.
     bool isAnonymous = false;
 
-    // Path to the layer.
+    // Path to the layer. If the layer is an anonymous layer, this
+    // will be the anonymous layer identifier.
     string layerPath;
 
     // Resolved path for the layer. If the layer is an anonymous layer,
-    // this will be the same as layerPath.
-    string resolvedLayerPath;
+    // this will be empty.
+    ArResolvedPath resolvedLayerPath;
 
     // Identifier for the layer, combining both the layer path and
     // file format arguments.
@@ -702,16 +707,14 @@ SdfLayer::_ComputeInfoToFindOrOpenLayer(
         return false;
     }
 
+    ArAssetInfo assetInfo;
+    ArResolvedPath resolvedLayerPath;
     const bool isAnonymous = IsAnonymousLayerIdentifier(layerPath);
     if (!isAnonymous) {
         layerPath = ArGetResolver().CreateIdentifier(layerPath);
+        resolvedLayerPath = Sdf_ResolvePath(
+            layerPath, computeAssetInfo ? &assetInfo : nullptr);
     }
-
-    // If we're trying to open an anonymous layer, do not try to compute the
-    // real path for it.
-    ArAssetInfo assetInfo;
-    string resolvedLayerPath = isAnonymous ? layerPath :
-        Sdf_ResolvePath(layerPath, computeAssetInfo ? &assetInfo : nullptr);
 
     // Merge explicitly-specified arguments over any arguments
     // embedded in the given identifier.
@@ -731,7 +734,7 @@ SdfLayer::_ComputeInfoToFindOrOpenLayer(
 
     info->isAnonymous = isAnonymous;
     info->layerPath.swap(layerPath);
-    info->resolvedLayerPath.swap(resolvedLayerPath);
+    info->resolvedLayerPath = std::move(resolvedLayerPath);
     info->identifier = Sdf_CreateIdentifier(
         info->layerPath, info->fileFormatArgs);
     swap(info->assetInfo, assetInfo);
@@ -741,7 +744,7 @@ SdfLayer::_ComputeInfoToFindOrOpenLayer(
 template <class ScopedLock>
 SdfLayerRefPtr
 SdfLayer::_TryToFindLayer(const string &identifier,
-                          const string &resolvedPath,
+                          const ArResolvedPath &resolvedPath,
                           ScopedLock &lock,
                           bool retryAsWriter)
 {
@@ -838,8 +841,7 @@ SdfLayer::FindOrOpen(const string &identifier,
             return TfNullPtr;
         }
     }
-
-    if (layerInfo.resolvedLayerPath.empty()) {
+    else if (layerInfo.resolvedLayerPath.empty()) {
         return TfNullPtr;
     }
 
@@ -884,6 +886,8 @@ SdfLayer::OpenAsAnonymous(
     bool metadataOnly,
     const std::string &tag)
 {
+    TF_PY_ALLOW_THREADS_IN_SCOPE();
+
     _FindOrOpenLayerInfo layerInfo;
     if (!_ComputeInfoToFindOrOpenLayer(layerPath, FileFormatArguments(), 
                                        &layerInfo)) {
@@ -973,11 +977,7 @@ SdfLayer::_Reload(bool force)
             return _ReloadSkipped;
         }
 
-        std::string resolvedPath;
-        std::string args;
-        Sdf_SplitIdentifier(GetIdentifier(), &resolvedPath, &args);
-
-        if (!_Read(identifier, resolvedPath, /* metadataOnly = */ false)) {
+        if (!_Read(identifier, ArResolvedPath(), /* metadataOnly = */ false)) {
             return _ReloadFailed;
         }
 
@@ -1079,9 +1079,10 @@ SdfLayer::ReloadLayers(
 bool 
 SdfLayer::Import(const string &layerPath)
 {
-    string filePath = Sdf_ResolvePath(layerPath);
-    if (filePath.empty())
+    const ArResolvedPath filePath = Sdf_ResolvePath(layerPath);
+    if (filePath.empty()) {
         return false;
+    }
 
     return _Read(layerPath, filePath, /* metadataOnly = */ false);
 }
@@ -1095,18 +1096,39 @@ SdfLayer::ImportFromString(const std::string &s)
 bool
 SdfLayer::_Read(
     const string& identifier,
-    const string& resolvedPath,
+    const ArResolvedPath& resolvedPathIn,
     bool metadataOnly)
 {
     TRACE_FUNCTION();
     TfAutoMallocTag tag("SdfLayer::_Read");
+
+    // This is in support of specialized file formats that piggyback
+    // on anonymous layer functionality. If the layer is anonymous,
+    // pass the layer identifier to the reader, otherwise, pass the
+    // resolved path of the layer.
+    std::string resolvedPath;
+    if (Sdf_IsAnonLayerIdentifier(identifier)) {
+        std::string args;
+        Sdf_SplitIdentifier(identifier, &resolvedPath, &args);
+    }
+    else {
+        resolvedPath = resolvedPathIn;
+    }
+
     TF_DESCRIBE_SCOPE("Loading layer '%s'", resolvedPath.c_str());
     TF_DEBUG(SDF_LAYER).Msg(
         "SdfLayer::_Read('%s', '%s', metadataOnly=%s)\n",
-        identifier.c_str(), resolvedPath.c_str(),
+        identifier.c_str(), resolvedPathIn.GetPathString().c_str(),
         TfStringify(metadataOnly).c_str());
 
     SdfFileFormatConstPtr format = GetFileFormat();
+    if (!format->SupportsReading()) {
+        TF_CODING_ERROR("Cannot read layer @%s@: %s file format does not"
+                        "support reading",
+                        identifier.c_str(),
+                        format->GetFormatId().GetText());
+        return false;
+    }
     return IsIncludedByDetachedLayerRules(identifier) ?
         format->ReadDetached(this, resolvedPath, metadataOnly) :
         format->Read(this, resolvedPath, metadataOnly);
@@ -1130,10 +1152,9 @@ SdfLayer::_Find(const string &identifier,
                 ScopedLock& lock,
                 bool retryAsWriter)
 {
-    // We don't need to drop the GIL here, since _TryToFindLayer() doesn't
-    // invoke any plugin code, and if we do wind up calling
-    // _WaitForInitializationAndCheckIfSuccessful() then we'll drop the GIL in
-    // there.
+    // Drop the GIL here, since python identity object management may be invoked
+    // when we convert the weakptr to refptr in _TryToFindLayer().
+    TF_PY_ALLOW_THREADS_IN_SCOPE();
 
     _FindOrOpenLayerInfo layerInfo;
     if (!_ComputeInfoToFindOrOpenLayer(identifier, args, &layerInfo)) {
@@ -2536,6 +2557,7 @@ SdfLayer::UpdateAssetInfo()
                     _assetInfo->resolverContext));
         }    
 
+        TF_PY_ALLOW_THREADS_IN_SCOPE();
         tbb::queuing_rw_mutex::scoped_lock lock(_GetLayerRegistryMutex());
         _InitializeFromIdentifier(GetIdentifier());
     }
@@ -3215,6 +3237,7 @@ SdfLayer::_UpdatePrimCompositionDependencyPaths(
 void
 SdfLayer::DumpLayerInfo()
 {
+    TF_PY_ALLOW_THREADS_IN_SCOPE();
     tbb::queuing_rw_mutex::scoped_lock
         lock(_GetLayerRegistryMutex(), /*write=*/false);
     std::cerr << "Layer Registry Dump:" << std::endl
@@ -3233,6 +3256,7 @@ SdfLayer::WriteDataFile(const string &filename)
 set<SdfLayerHandle>
 SdfLayer::GetLoadedLayers()
 {
+    TF_PY_ALLOW_THREADS_IN_SCOPE();
     tbb::queuing_rw_mutex::scoped_lock
         lock(_GetLayerRegistryMutex(), /*write=*/false);
     return _layerRegistry->GetLayers();
@@ -3309,13 +3333,6 @@ SdfLayer::_OpenLayerAndUnlockRegistry(
         return TfNullPtr;
     }
 
-    // This is in support of specialized file formats that piggyback
-    // on anonymous layer functionality. If the layer is anonymous,
-    // pass the original assetPath to the reader, otherwise, pass the
-    // resolved path of the layer.
-    const string readFilePath = 
-        info.isAnonymous ? info.layerPath : info.resolvedLayerPath;
-
     if (!layer->IsMuted()) {
         // Run the file parser to read in the file contents.  We do this in a
         // dispatcher, so that other threads that "wait" to read this file can
@@ -3326,8 +3343,8 @@ SdfLayer::_OpenLayerAndUnlockRegistry(
         // WorkWithScopedParallelism([&]() {
         //     layer->_initDispatcher.Run([&readSuccess, &layer, &info,
         //                                 &readFilePath, metadataOnly]() {
-            readSuccess =
-                layer->_Read(info.identifier, readFilePath, metadataOnly);
+            readSuccess = layer->_Read(
+                info.identifier, info.resolvedLayerPath, metadataOnly);
         //     });
         //     layer->_initDispatcher.Wait();
         //});
@@ -3344,7 +3361,7 @@ SdfLayer::_OpenLayerAndUnlockRegistry(
     if (!info.isAnonymous) {
         // Grab modification timestamp.
         VtValue timestamp(ArGetResolver().GetModificationTimestamp(
-            info.layerPath, ArResolvedPath(readFilePath)));
+            info.layerPath, info.resolvedLayerPath));
         layer->_assetModificationTime.Swap(timestamp);
     }
 
@@ -4704,6 +4721,14 @@ SdfLayer::_WriteToFile(const string & newFileName,
     if (!TF_VERIFY(fileFormat)) {
         TF_RUNTIME_ERROR("Unknown file format when attempting to write '%s'",
             newFileName.c_str());
+        return false;
+    }
+
+    if (!fileFormat->SupportsWriting()) {
+        TF_CODING_ERROR("Cannot save layer @%s@: %s file format does not"
+                        "support writing",
+                        newFileName.c_str(),
+                        fileFormat->GetFormatId().GetText());
         return false;
     }
 

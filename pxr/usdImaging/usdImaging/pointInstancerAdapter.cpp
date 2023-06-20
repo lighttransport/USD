@@ -76,14 +76,16 @@ UsdImagingPointInstancerAdapter::~UsdImagingPointInstancerAdapter()
 }
 
 TfTokenVector
-UsdImagingPointInstancerAdapter::GetImagingSubprims()
+UsdImagingPointInstancerAdapter::GetImagingSubprims(UsdPrim const& prim)
 {
     return { TfToken() };
 }
 
 
 TfToken
-UsdImagingPointInstancerAdapter::GetImagingSubprimType(TfToken const& subprim)
+UsdImagingPointInstancerAdapter::GetImagingSubprimType(
+        UsdPrim const& prim,
+        TfToken const& subprim)
 {
     if (subprim.IsEmpty()) {
         return HdPrimTypeTokens->instancer;
@@ -93,8 +95,8 @@ UsdImagingPointInstancerAdapter::GetImagingSubprimType(TfToken const& subprim)
 
 HdContainerDataSourceHandle
 UsdImagingPointInstancerAdapter::GetImagingSubprimData(
-        TfToken const& subprim,
         UsdPrim const& prim,
+        TfToken const& subprim,
         const UsdImagingDataSourceStageGlobals &stageGlobals)
 {
     if (subprim.IsEmpty()) {
@@ -108,12 +110,13 @@ UsdImagingPointInstancerAdapter::GetImagingSubprimData(
 
 HdDataSourceLocatorSet
 UsdImagingPointInstancerAdapter::InvalidateImagingSubprim(
+        UsdPrim const& prim,
         TfToken const& subprim,
         TfTokenVector const& properties)
 {
     if (subprim.IsEmpty()) {
         return UsdImagingDataSourcePointInstancerPrim::Invalidate(
-            subprim, properties);
+            prim, subprim, properties);
     }
     
     return HdDataSourceLocatorSet();
@@ -851,7 +854,7 @@ UsdImagingPointInstancerAdapter::_ProcessPrimRemoval(SdfPath const& cachePath,
     // If the affected instancer is populated, delete it by finding the
     // top-level instancer and calling _UnloadInstancer on that.
     // XXX: It would be nice if we could just remove *this* prim and rely on
-    // the resync code to propertly resync it with the right parent instancer.
+    // the resync code to properly resync it with the right parent instancer.
 
     _InstancerDataMap::iterator instIt = _instancerData.find(affectedInstancer);
 

@@ -25,6 +25,7 @@ pxr_library(tf
         anyUniquePtr
         anyWeakPtr
         atomicOfstreamWrapper
+        bigRWMutex
         bitUtils
         debug
         debugNotice
@@ -69,6 +70,7 @@ pxr_library(tf
         setenv
         singleton
         smallVector
+        spinRWMutex
         stackTrace
         stacked
         status
@@ -128,6 +130,7 @@ pxr_library(tf
         instantiateSingleton.h
         instantiateStacked.h
         instantiateType.h
+        pxrCLI11/CLI11.h
         pxrTslRobinMap/robin_growth_policy.h
         pxrTslRobinMap/robin_hash.h
         pxrTslRobinMap/robin_map.h
@@ -144,6 +147,7 @@ pxr_library(tf
     PYTHON_PUBLIC_HEADERS
         py3Compat.h
         pySafePython.h
+        pySignatureExt.h
         pyStaticTokens.h
 
     PRIVATE_CLASSES
@@ -358,6 +362,7 @@ pxr_build_test(testTf
         testenv/refPtr.cpp
         testenv/registryManager.cpp
         testenv/registryManagerUnload.cpp
+        testenv/rwMutexes.cpp
         testenv/safeOutputFile.cpp
         testenv/scoped.cpp
         testenv/scopeDescription.cpp
@@ -559,6 +564,9 @@ pxr_register_test(TfPreprocessorUtils
 )
 pxr_register_test(TfProbe
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testTf TfProbe"
+)
+pxr_register_test(TfRWMutexes
+    COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testTf TfRWMutexes"
 )
 pxr_register_test(TfRegistryManager
     COMMAND "${CMAKE_INSTALL_PREFIX}/tests/testTf TfRegistryManager"

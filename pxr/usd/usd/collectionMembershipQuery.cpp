@@ -54,25 +54,6 @@ _ComputeIncludedImpl(
         query.GetAsPathExpansionRuleMap();
     const bool hasExcludes = query.HasExcludes();
 
-    // A path is excluded if the path itself or any of its ancestors are
-    // excluded.
-    auto IsExcluded = [hasExcludes,pathExpRuleMap](const SdfPath &path) {
-        // Return early if we know that there are no excludes.
-        if (!hasExcludes) {
-            return false;
-        }
-        for (SdfPath p = path; p != SdfPath::EmptyPath();
-             p = p.GetParentPath()) {
-            // Include if the nearest ancestor path with an opinion in
-            // path->expansionRuleMap isn't excluded.
-            auto it = pathExpRuleMap.find(p);
-            if (it != pathExpRuleMap.end()) {
-                return it->second == UsdTokens->exclude;
-            }
-        }
-        return false;
-    };
-
     // Helper function to get the UsdProperty object associated with a given
     // property path.
     auto GetPropertyAtPath = [stage](const SdfPath &path) {
@@ -149,7 +130,8 @@ _ComputeIncludedImpl(
                     // If an object below the excluded object is included,
                     // it will have a separate entry in the
                     // path<->expansionRule map.
-                    if (IsExcluded(descendantPrim.GetPath())) {
+                    if (hasExcludes && !query.IsPathIncluded(
+                            descendantPrim.GetPath())) {
                         iter.PruneChildren();
                         continue;
                     }
@@ -338,8 +320,8 @@ UsdCollectionMembershipQuery::IsPathIncluded(
     // expansion-rule.
     if (path.IsPrimPath()) {
         bool parentIsExcludedOrExplicitlyIncluded = 
-                (parentExpansionRule == UsdTokens->exclude ||
-                    parentExpansionRule == UsdTokens->explicitOnly);
+            (parentExpansionRule == UsdTokens->exclude ||
+             parentExpansionRule == UsdTokens->explicitOnly);
 
         if (expansionRule) {
             *expansionRule = parentIsExcludedOrExplicitlyIncluded ? 
@@ -378,14 +360,10 @@ UsdCollectionMembershipQuery::Hash::operator()(
     std::vector<_Entry> entries(q._pathExpansionRuleMap.begin(),
                                 q._pathExpansionRuleMap.end());
     std::sort(entries.begin(), entries.end());
-    size_t h = 0;
-    for (_Entry const& entry: entries) {
-        boost::hash_combine(h, entry.first);
-        boost::hash_combine(h, entry.second);
-    }
+
     // Don't hash _hasExcludes because it is derived from
     // the contents of _pathExpansionRuleMap.
-    return h;
+    return TfHash()(entries);
 }
 
 PXR_NAMESPACE_CLOSE_SCOPE

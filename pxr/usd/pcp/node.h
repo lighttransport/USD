@@ -46,7 +46,7 @@ class PcpNodeRef_ChildrenReverseIterator;
 class PcpErrorBase;
 typedef std::shared_ptr<PcpErrorBase> PcpErrorBasePtr;
 
-TF_DECLARE_WEAK_PTRS(PcpPrimIndex_Graph);
+TF_DECLARE_REF_PTRS(PcpPrimIndex_Graph);
 
 /// \class PcpNodeRef
 ///
@@ -102,7 +102,9 @@ public:
     };
 
     /// Returns the graph that this node belongs to.
-    PcpPrimIndex_GraphPtr GetOwningGraph() const;
+    PcpPrimIndex_Graph *GetOwningGraph() const {
+        return _graph;
+    }
 
     /// Returns a value that uniquely identifies this node.
     PCP_API
@@ -139,7 +141,7 @@ public:
     /// \p subtree connected to this node via \p arc.
     PCP_API
     PcpNodeRef InsertChildSubgraph(
-        const PcpPrimIndex_GraphPtr& subgraph, const PcpArc& arc,
+        const PcpPrimIndex_GraphRefPtr& subgraph, const PcpArc& arc,
         PcpErrorBasePtr *error);
 
     /// Returns the immediate origin node for this node. The origin node
@@ -309,11 +311,17 @@ private: // Data
 };
 
 /// Typedefs and support functions
+template <typename HashState>
+inline
+void
+TfHashAppend(HashState& h, const PcpNodeRef& x){
+    h.Append((size_t)(x.GetUniqueIdentifier()));
+}
 inline
 size_t
 hash_value(const PcpNodeRef& x)
 {
-    return (size_t)x.GetUniqueIdentifier();
+    return TfHash{}(x);
 }
 
 typedef TfHashSet<PcpNodeRef, PcpNodeRef::Hash> PcpNodeRefHashSet;

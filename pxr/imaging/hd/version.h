@@ -59,7 +59,12 @@
 // 43 -> 44: Replaced HdCamera::GetProjectionMatrix with
 //           HdComputeProjectionMatrix.
 // 44 -> 45: Added HdSceneDelegate::GetScenePrimPaths.
-#define HD_API_VERSION 45
+// 45 -> 46: New signatures for HdRendererPlugin::IsSupported and
+//           HdRendererPluginRegistry::GetDefaultPluginId
+// 46 -> 47: Adding HdRenderDelegate::GetRenderSettingsNamespaces()
+// 47 -> 48: New signature for HdRenderIndex::InsertSceneIndex: added optional 
+//           argument needsPrefixing
+#define HD_API_VERSION 48
 
 // 1  ->  2: SimpleLighting -> FallbackLighting
 #define HD_SHADER_API 2

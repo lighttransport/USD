@@ -97,7 +97,6 @@
 
 #include <boost/optional.hpp>
 #include <boost/iterator/transform_iterator.hpp>
-#include <boost/utility/in_place_factory.hpp>
 
 #include <tbb/spin_rw_mutex.h>
 #include <tbb/spin_mutex.h>
@@ -275,13 +274,13 @@ _GetLayerToStageOffset(const PcpNodeRef& pcpNode,
     return localOffset;
 }
 
-char const *_dormantMallocTagID = "UsdStages in aggregate";
-
 inline
 std::string 
-_StageTag(const std::string &id)
+_StageMallocTagString(const std::string &id)
 {
-    return "UsdStage: @" + id + "@";
+    return TfMallocTag::IsInitialized()
+        ? "UsdStage: @" + id + "@"
+        : std::string();
 }
 
 class UsdStage::_PendingChanges
@@ -295,6 +294,7 @@ public:
 
     using PathsToChangesMap = UsdNotice::ObjectsChanged::_PathsToChangesMap;
     PathsToChangesMap recomposeChanges, otherResyncChanges, otherInfoChanges;
+    PathsToChangesMap primTypeInfoChanges;
 };
 
 // ------------------------------------------------------------------------- //
@@ -496,12 +496,10 @@ UsdStage::UsdStage(const SdfLayerRefPtr& rootLayer,
         _rootLayer->GetIdentifier().c_str(),
         _sessionLayer ? _sessionLayer->GetIdentifier().c_str() : "<null>");
 
-ARCH_PRAGMA_PUSH
-ARCH_PRAGMA_DEPRECATED_POSIX_NAME
-    _mallocTagID = TfMallocTag::IsInitialized() ?
-        strdup(_StageTag(rootLayer->GetIdentifier()).c_str()) :
-        _dormantMallocTagID;
-ARCH_PRAGMA_POP
+    if (TfMallocTag::IsInitialized()) {
+        _mallocTagID.reset(
+            new std::string(_StageMallocTagString(rootLayer->GetIdentifier())));
+    }
 
     _cache->SetVariantFallbacks(GetGlobalVariantFallbacks());
 }
@@ -513,9 +511,6 @@ UsdStage::~UsdStage()
         _rootLayer ? _rootLayer->GetIdentifier().c_str() : "<null>",
         _sessionLayer ? _sessionLayer->GetIdentifier().c_str() : "<null>");
     _Close();
-    if (_mallocTagID != _dormantMallocTagID){
-        free(const_cast<char*>(_mallocTagID));
-    }
 }
 
 void
@@ -639,14 +634,8 @@ UsdStage::_InstantiateStage(const SdfLayerRefPtr &rootLayer,
     TF_DEBUG(USD_STAGE_OPEN)
         .Msg("UsdStage::_InstantiateStage: Creating new UsdStage\n");
 
-    // We don't want to pay for the tag-string construction unless
-    // we instrumentation is on, since some Stage ctors (InMemory) can be
-    // very lightweight.
-    boost::optional<TfAutoMallocTag2> tag;
-
-    if (TfMallocTag::IsInitialized()){
-        tag = boost::in_place("Usd", _StageTag(rootLayer->GetIdentifier()));
-    }
+    TfAutoMallocTag tag(
+        "Usd", _StageMallocTagString(rootLayer->GetIdentifier()));
 
     // Debug timing info
     TfStopwatch stopwatch;
@@ -741,7 +730,8 @@ UsdStageRefPtr
 UsdStage::CreateNew(const std::string& identifier,
                     InitialLoadSet load)
 {
-    TfAutoMallocTag2 tag("Usd", _StageTag(identifier));
+    TfAutoMallocTag tag("Usd", _StageMallocTagString(identifier));
+    TRACE_FUNCTION();
 
     if (SdfLayerRefPtr layer = _CreateNewLayer(identifier))
         return Open(layer, _CreateAnonymousSessionLayer(layer), load);
@@ -754,7 +744,8 @@ UsdStage::CreateNew(const std::string& identifier,
                     const SdfLayerHandle& sessionLayer,
                     InitialLoadSet load)
 {
-    TfAutoMallocTag2 tag("Usd", _StageTag(identifier));
+    TfAutoMallocTag tag("Usd", _StageMallocTagString(identifier));
+    TRACE_FUNCTION();
 
     if (SdfLayerRefPtr layer = _CreateNewLayer(identifier))
         return Open(layer, sessionLayer, load);
@@ -767,8 +758,9 @@ UsdStage::CreateNew(const std::string& identifier,
                     const ArResolverContext& pathResolverContext,
                     InitialLoadSet load)
 {
-    TfAutoMallocTag2 tag("Usd", _StageTag(identifier));
-
+    TfAutoMallocTag tag("Usd", _StageMallocTagString(identifier));
+    TRACE_FUNCTION();
+        
     if (SdfLayerRefPtr layer = _CreateNewLayer(identifier))
         return Open(layer, pathResolverContext, load);
     return TfNullPtr;
@@ -781,7 +773,8 @@ UsdStage::CreateNew(const std::string& identifier,
                     const ArResolverContext& pathResolverContext,
                     InitialLoadSet load)
 {
-    TfAutoMallocTag2 tag("Usd", _StageTag(identifier));
+    TfAutoMallocTag tag("Usd", _StageMallocTagString(identifier));
+    TRACE_FUNCTION();
 
     if (SdfLayerRefPtr layer = _CreateNewLayer(identifier))
         return Open(layer, sessionLayer, pathResolverContext, load);
@@ -859,7 +852,7 @@ _OpenLayer(
 {
     boost::optional<ArResolverContextBinder> binder;
     if (!resolverContext.IsEmpty())
-        binder = boost::in_place(resolverContext);
+        binder.emplace(resolverContext);
 
     SdfLayer::FileFormatArguments args;
     args[SdfFileFormatTokens->TargetArg] =
@@ -872,7 +865,8 @@ _OpenLayer(
 UsdStageRefPtr
 UsdStage::Open(const std::string& filePath, InitialLoadSet load)
 {
-    TfAutoMallocTag2 tag("Usd", _StageTag(filePath));
+    TfAutoMallocTag tag("Usd", _StageMallocTagString(filePath));
+    TRACE_FUNCTION();
 
     SdfLayerRefPtr rootLayer = _OpenLayer(filePath);
     if (!rootLayer) {
@@ -888,7 +882,8 @@ UsdStage::Open(const std::string& filePath,
                const ArResolverContext& pathResolverContext,
                InitialLoadSet load)
 {
-    TfAutoMallocTag2 tag("Usd", _StageTag(filePath));
+    TfAutoMallocTag tag("Usd", _StageMallocTagString(filePath));
+    TRACE_FUNCTION();
 
     SdfLayerRefPtr rootLayer = _OpenLayer(filePath, pathResolverContext);
     if (!rootLayer) {
@@ -904,7 +899,8 @@ UsdStage::OpenMasked(const std::string& filePath,
                      const UsdStagePopulationMask &mask,
                      InitialLoadSet load)
 {
-    TfAutoMallocTag2 tag("Usd", _StageTag(filePath));
+    TfAutoMallocTag tag("Usd", _StageMallocTagString(filePath));
+    TRACE_FUNCTION();
 
     SdfLayerRefPtr rootLayer = _OpenLayer(filePath);
     if (!rootLayer) {
@@ -921,7 +917,8 @@ UsdStage::OpenMasked(const std::string& filePath,
                      const UsdStagePopulationMask &mask,
                      InitialLoadSet load)
 {
-    TfAutoMallocTag2 tag("Usd", _StageTag(filePath));
+    TfAutoMallocTag tag("Usd", _StageMallocTagString(filePath));
+    TRACE_FUNCTION();
 
     SdfLayerRefPtr rootLayer = _OpenLayer(filePath, pathResolverContext);
     if (!rootLayer) {
@@ -1069,7 +1066,7 @@ UsdStage::Open(const SdfLayerHandle& rootLayer,
              rootLayer->GetIdentifier().c_str(),
              sessionLayer ? sessionLayer->GetIdentifier().c_str() : "<null>",
              TfStringify(load).c_str());
-
+    TRACE_FUNCTION();
     return _OpenImpl(load, rootLayer, sessionLayer);
 }
 
@@ -1090,7 +1087,7 @@ UsdStage::Open(const SdfLayerHandle& rootLayer,
              rootLayer->GetIdentifier().c_str(),
              pathResolverContext.GetDebugString().c_str(), 
              TfStringify(load).c_str());
-
+    TRACE_FUNCTION();
     return _OpenImpl(load, rootLayer, pathResolverContext);
 }
 
@@ -1113,7 +1110,7 @@ UsdStage::Open(const SdfLayerHandle& rootLayer,
              sessionLayer ? sessionLayer->GetIdentifier().c_str() : "<null>",
              pathResolverContext.GetDebugString().c_str(),
              TfStringify(load).c_str());
-
+    TRACE_FUNCTION();
     return _OpenImpl(load, rootLayer, sessionLayer, pathResolverContext);
 }
 
@@ -1137,6 +1134,7 @@ UsdStage::OpenMasked(const SdfLayerHandle& rootLayer,
              TfStringify(mask).c_str(),
              TfStringify(load).c_str());
 
+    TRACE_FUNCTION();
     return _InstantiateStage(SdfLayerRefPtr(rootLayer),
                              _CreateAnonymousSessionLayer(rootLayer),
                              _CreatePathResolverContext(rootLayer),
@@ -1164,6 +1162,7 @@ UsdStage::OpenMasked(const SdfLayerHandle& rootLayer,
              TfStringify(mask).c_str(),
              TfStringify(load).c_str());
 
+    TRACE_FUNCTION();
     return _InstantiateStage(SdfLayerRefPtr(rootLayer),
                              SdfLayerRefPtr(sessionLayer),
                              _CreatePathResolverContext(rootLayer),
@@ -1191,6 +1190,7 @@ UsdStage::OpenMasked(const SdfLayerHandle& rootLayer,
              TfStringify(mask).c_str(),
              TfStringify(load).c_str());
 
+    TRACE_FUNCTION();
     return _InstantiateStage(SdfLayerRefPtr(rootLayer),
                              _CreateAnonymousSessionLayer(rootLayer),
                              pathResolverContext,
@@ -1220,6 +1220,7 @@ UsdStage::OpenMasked(const SdfLayerHandle& rootLayer,
              TfStringify(mask).c_str(),
              TfStringify(load).c_str());
 
+    TRACE_FUNCTION();
     return _InstantiateStage(SdfLayerRefPtr(rootLayer),
                              SdfLayerRefPtr(sessionLayer),
                              pathResolverContext,
@@ -1602,7 +1603,7 @@ UsdStage::_SetMetadataImpl(const UsdObject &obj,
         return false;
     }
 
-    TfAutoMallocTag2 tag("Usd", _mallocTagID);
+    TfAutoMallocTag tag("Usd", _GetMallocTagId());
 
     SdfSpecHandle spec;
 
@@ -2113,7 +2114,7 @@ UsdStage::LoadAndUnload(const SdfPathSet &loadSet,
                         const SdfPathSet &unloadSet,
                         UsdLoadPolicy policy)
 {
-    TfAutoMallocTag2 tag("Usd", _mallocTagID);
+    TfAutoMallocTag tag("Usd", _GetMallocTagId());
 
     // Optimization: If either or both of the sets is empty then check the other
     // set to see if the load rules already produce the desired state.  If so
@@ -2166,8 +2167,16 @@ UsdStage::LoadAndUnload(const SdfPathSet &loadSet,
 
     _loadRules.LoadAndUnload(finalLoadSet, finalUnloadSet, policy);
 
-    // Go through the finalLoadSet, and check ancestors -- if any are loaded,
-    // include the most ancestral which was loaded last in the finalLoadSet.
+    // Now the rules are established, but we need to identify the paths on the
+    // stage where we need to recompose.  In the case of loading (the
+    // finalLoadSet) we cannot just recompose those paths and their descendants.
+    // We also have to consider ancestors, because if we load /foo/bar/baz, that
+    // also implicitly loads /foo and /foo/bar.  To handle this, we need to walk
+    // the ancestors of each path in the finalLoadSet to find the most-ancestral
+    // unloaded prim, and that is where we need to recompose.
+    //
+    // Note that this is potentially a big over-recomposition, since we don't
+    // yet have a way to tell the stage to recompose more granularly.
     for (SdfPath const &p: finalLoadSet) {
         SdfPath curPath = p;
         while (true) {
@@ -2175,8 +2184,10 @@ UsdStage::LoadAndUnload(const SdfPathSet &loadSet,
             if (parentPath.IsEmpty())
                 break;
             UsdPrim prim = GetPrimAtPath(parentPath);
-            if (prim && prim.IsLoaded() && p != curPath) {
-                finalLoadSet.insert(curPath);
+            if (prim && prim.IsLoaded()) {
+                if (p != curPath) {
+                    finalLoadSet.insert(curPath);
+                }
                 break;
             }
             curPath = parentPath;
@@ -2951,7 +2962,7 @@ UsdStage::_ComposeSubtreesInParallel(
 
     // Begin a subtree composition in parallel.
     WorkWithScopedParallelism([this, &prims, &primIndexPaths]() {
-            _dispatcher = boost::in_place();
+            _dispatcher.emplace();
             // We populate the clip cache concurrently during composition, so we
             // need to enable concurrent population here.
             Usd_ClipCache::ConcurrentPopulationContext
@@ -3000,7 +3011,7 @@ UsdStage::_ComposeSubtreeImpl(
     UsdStagePopulationMask const *mask,
     const SdfPath& inPrimIndexPath)
 {
-    TfAutoMallocTag2 tag("Usd", _mallocTagID);
+    TfAutoMallocTag tag("Usd", _GetMallocTagId());
 
     const SdfPath primIndexPath = 
         (inPrimIndexPath.IsEmpty() ? prim->GetPath() : inPrimIndexPath);
@@ -3026,28 +3037,12 @@ UsdStage::_ComposeSubtreeImpl(
         (parent == _pseudoRoot 
          && prim->_primIndex->GetPath() != prim->GetPath());
 
-    if (parent && !isPrototypePrim) {
-        // Compose the type info full type ID for the prim which includes
-        // the type name, applied schemas, and a possible mapped fallback type 
-        // if the stage specifies it.
-        Usd_PrimTypeInfoCache::TypeId typeId(
-            _ComposeTypeName(prim->_primIndex));
-        _ComposeAuthoredAppliedSchemas(
-            prim->_primIndex, &typeId.appliedAPISchemas);
-        if (const TfToken *fallbackType = TfMapLookupPtr(
-                _invalidPrimTypeToFallbackMap, typeId.primTypeName)) {
-            typeId.mappedTypeName = *fallbackType;
-        }
-
-        // Ask the type info cache for the type info for our type.
-        prim->_primTypeInfo = 
-            _GetPrimTypeInfoCache().FindOrCreatePrimTypeInfo(std::move(typeId));
-    } else {
-        prim->_primTypeInfo = _GetPrimTypeInfoCache().GetEmptyPrimTypeInfo();
-    }
-
-    // Compose type info and flags for prim.
+    // Compose flags for prim.
     prim->_ComposeAndCacheFlags(parent, isPrototypePrim);
+
+    // Compose prim type info after setting the flags as this relies on the 
+    // flags being set.
+    _ComposePrimTypeInfoImpl(prim);
 
     // Pre-compute clip information for this prim to avoid doing so
     // at value resolution time.
@@ -3072,6 +3067,31 @@ UsdStage::_ComposeSubtreeImpl(
 
     // Compose the set of children on this prim.
     _ComposeChildren(prim, mask, /*recurse=*/true);
+}
+
+void UsdStage::_ComposePrimTypeInfoImpl(Usd_PrimDataPtr prim) 
+{
+    // The pseudo-root and root prototype prims do not have prim type info.
+    if (prim->IsPseudoRoot() || prim->IsPrototype()) {
+        prim->_primTypeInfo = _GetPrimTypeInfoCache().GetEmptyPrimTypeInfo();
+        return;
+    }
+
+    // Compose the type info full type ID for the prim which includes
+    // the type name, applied schemas, and a possible mapped fallback type 
+    // if the stage specifies it.
+    Usd_PrimTypeInfoCache::TypeId typeId(
+        _ComposeTypeName(prim->_primIndex));
+    _ComposeAuthoredAppliedSchemas(
+        prim->_primIndex, &typeId.appliedAPISchemas);
+    if (const TfToken *fallbackType = TfMapLookupPtr(
+            _invalidPrimTypeToFallbackMap, typeId.primTypeName)) {
+        typeId.mappedTypeName = *fallbackType;
+    }
+
+    // Ask the type info cache for the type info for our type.
+    prim->_primTypeInfo = 
+        _GetPrimTypeInfoCache().FindOrCreatePrimTypeInfo(std::move(typeId));
 }
 
 void
@@ -3103,7 +3123,7 @@ UsdStage::_DestroyPrimsInParallel(const vector<SdfPath>& paths)
     TF_AXIOM(!_dispatcher);
 
     WorkWithScopedParallelism([&]() {
-        _dispatcher = boost::in_place();
+        _dispatcher.emplace();
         for (const auto& path : paths) {
             Usd_PrimDataPtr prim = _GetPrimDataAtPath(path);
             // We *expect* every prim in paths to be valid as we iterate,
@@ -3163,7 +3183,7 @@ UsdStage::_DestroyPrim(Usd_PrimDataPtr prim)
 void
 UsdStage::Reload()
 {
-    TfAutoMallocTag2 tag("Usd", _mallocTagID);
+    TfAutoMallocTag tag("Usd", _GetMallocTagId());
 
     // This UsdStage may receive layer change notices due to layers being
     // reloaded below. However, we won't receive that notice for any layers
@@ -3639,7 +3659,7 @@ void
 UsdStage::MuteAndUnmuteLayers(const std::vector<std::string> &muteLayers,
                               const std::vector<std::string> &unmuteLayers)
 {
-    TfAutoMallocTag2 tag("Usd", _mallocTagID);
+    TfAutoMallocTag tag("Usd", _GetMallocTagId());
 
     PcpChanges changes;
     std::vector<std::string> newMutedLayers, newUnMutedLayers;
@@ -3883,7 +3903,7 @@ void
 UsdStage::_HandleLayersDidChange(
     const SdfNotice::LayersDidChangeSentPerLayer &n)
 {
-    TfAutoMallocTag2 tag("Usd", _mallocTagID);
+    TfAutoMallocTag tag("Usd", _GetMallocTagId());
 
     // Ignore if this is not the round of changes we're looking for.
     size_t serial = n.GetSerialNumber();
@@ -3921,6 +3941,7 @@ UsdStage::_HandleLayersDidChange(
     // have otherwise changed.
     using _PathsToChangesMap = UsdNotice::ObjectsChanged::_PathsToChangesMap;
     _PathsToChangesMap& recomposeChanges = _pendingChanges->recomposeChanges;
+    _PathsToChangesMap& primTypeInfoChanges = _pendingChanges->primTypeInfoChanges;
     _PathsToChangesMap& otherResyncChanges = _pendingChanges->otherResyncChanges;
     _PathsToChangesMap& otherInfoChanges = _pendingChanges->otherInfoChanges;
 
@@ -3983,6 +4004,7 @@ UsdStage::_HandleLayersDidChange(
                 sdfPath.IsPrimOrPrimVariantSelectionPath()) {
 
                 bool didChangeActive = false;
+                bool willChangePrimTypeInfo = false;
                 for (const auto& info : entry.infoChanged) {
                     if (info.first == SdfFieldKeys->Active) {
                         TF_DEBUG(USD_CHANGES).Msg(
@@ -3997,10 +4019,11 @@ UsdStage::_HandleLayersDidChange(
                 } else {
                     for (const auto& info : entry.infoChanged) {
                         const auto& infoKey = info.first;
-                        if (infoKey == SdfFieldKeys->Kind ||
-                            infoKey == SdfFieldKeys->TypeName ||
+                        if (infoKey == SdfFieldKeys->TypeName ||
+                            infoKey == UsdTokens->apiSchemas) {
+                            willChangePrimTypeInfo = true;
+                        } else if (infoKey == SdfFieldKeys->Kind ||
                             infoKey == SdfFieldKeys->Specifier ||
-                            infoKey == UsdTokens->apiSchemas ||
                             
                             // XXX: Could be more specific when recomposing due
                             //      to clip changes. E.g., only update the clip
@@ -4025,6 +4048,9 @@ UsdStage::_HandleLayersDidChange(
                 if (willRecompose) {
                     _AddAffectedStagePaths(layer, sdfPath, 
                                            *_cache, &recomposeChanges, &entry);
+                } else if (willChangePrimTypeInfo) {
+                    _AddAffectedStagePaths(layer, sdfPath, 
+                                           *_cache, &primTypeInfoChanges, &entry);
                 }
                 if (didChangeActive) {
                     _AddAffectedStagePaths(layer, sdfPath, 
@@ -4101,6 +4127,7 @@ UsdStage::_ProcessPendingChanges()
     _PathsToChangesMap& recomposeChanges = _pendingChanges->recomposeChanges;
     _PathsToChangesMap& otherResyncChanges=_pendingChanges->otherResyncChanges;
     _PathsToChangesMap& otherInfoChanges = _pendingChanges->otherInfoChanges;
+    _PathsToChangesMap& primTypeInfoChanges = _pendingChanges->primTypeInfoChanges;
 
     _Recompose(changes, &recomposeChanges);
 
@@ -4110,6 +4137,7 @@ UsdStage::_ProcessPendingChanges()
 
         otherResyncChanges.clear();
         otherInfoChanges.clear();
+        primTypeInfoChanges.clear();
     }
     else {
         // Filter out all changes to objects beneath instances and remap
@@ -4143,8 +4171,36 @@ UsdStage::_ProcessPendingChanges()
         };
 
         remapChangesToPrototypes(&recomposeChanges);
+        remapChangesToPrototypes(&primTypeInfoChanges);
         remapChangesToPrototypes(&otherResyncChanges);
         remapChangesToPrototypes(&otherInfoChanges);
+
+        // Before processing any prim type info changes, remove any that would
+        // already have been covered by the recomposed prims.
+        _MergeAndRemoveDescendentEntries(
+                &recomposeChanges, &primTypeInfoChanges);
+
+        // Recompose the prim type info for the prims that need it. 
+        for (const auto &entry : primTypeInfoChanges) {
+            PathToNodeMap::const_accessor acc;
+            if (_primMap.find(acc, entry.first)) {
+                auto prim = acc->second.get();
+                if (prim) {
+                    _ComposePrimTypeInfoImpl(prim);
+                }
+            }
+        }
+
+        // Even though we don't actually recompose prims that only have a type
+        // info change, we still treat them as recomposed as far as notification
+        // is concerned. 
+        if (recomposeChanges.empty()) {
+            recomposeChanges.swap(primTypeInfoChanges);
+        } else {
+            for (auto& entry : primTypeInfoChanges) {
+                recomposeChanges[entry.first] = std::move(entry.second);
+            }
+        }
 
         // Add in all other paths that are marked as resynced.
         if (recomposeChanges.empty()) {
@@ -4616,7 +4672,7 @@ UsdStage::_ComposePrimIndexesInParallel(
         primIndexPaths, &errs, 
         _NameChildrenPred(mask, &_loadRules, _instanceCache.get()),
         _IncludePayloadsPredicate(this),
-        "Usd", _mallocTagID);
+        "Usd", _GetMallocTagId());
 
     if (!errs.empty()) {
         _ReportPcpErrors(errs, context);
@@ -6024,6 +6080,13 @@ UsdStage::_SetValueImpl(
         if (valType.IsUnknown()) {
             TF_RUNTIME_ERROR("Unknown typename for <%s>: '%s'",
                              typeName.GetText(), attr.GetPath().GetText());
+            return false;
+        }
+        static const TfType opaqueType = TfType::Find<SdfOpaqueValue>();
+        if (valType == opaqueType) {
+            TF_CODING_ERROR("Can't set value on <%s>: %s-typed attributes "
+                            "cannot have an authored default value",
+                            attr.GetPath().GetText(), typeName.GetText());
             return false;
         }
         // Check that the passed value is the expected type.
@@ -7591,10 +7654,9 @@ struct UsdStage::_PropertyStackResolver {
                 if (_withLayerOffsets) {
                     // The layer offset for the clip is the layer offset of the
                     // source layer of the clip set.
-                    const auto layer = clipSet->sourceLayerStack->GetLayers()[
-                        clipSet->sourceLayerIndex];
                     propertyStackWithLayerOffsets.emplace_back(
-                        propertySpec, _GetLayerToStageOffset(node, layer)); 
+                        propertySpec,
+                        _GetLayerToStageOffset(node, clipSet->sourceLayer)); 
                 } else {
                     propertyStack.push_back(propertySpec);
                 }
@@ -7971,11 +8033,10 @@ _GetResolvedValueAtTimeWithClipsImpl(
             }
         }
 
-        const size_t layerStackIndex = res->GetLayerStackIndex();
         for (const Usd_ClipSetRefPtr& clipSet : clips) {
             // We only care about clips that were introduced at this
             // position within the LayerStack.
-            if (clipSet->sourceLayerIndex == layerStackIndex) {
+            if (clipSet->sourceLayer == res->GetLayer()) {
                 // Look through clips to see if they have a time sample for
                 // this attribute. If a time is given, examine just the clips
                 // that are active at that time.
@@ -8967,6 +9028,12 @@ UsdInterpolationType
 UsdStage::GetInterpolationType() const
 {
     return _interpolationType;
+}
+
+char const *
+UsdStage::_GetMallocTagId() const
+{
+    return _mallocTagID ? _mallocTagID->c_str() : "UsdStages in aggregate";
 }
 
 std::string UsdDescribe(const UsdStage *stage) {
